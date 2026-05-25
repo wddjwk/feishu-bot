@@ -86,8 +86,11 @@ class AIRunner:
         prompt_text = prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2)
         try:
             command = self._build_command(selected_tool, selected_model, resume_session_id)
+            use_stdin = bool(self.config.tool_config(selected_tool).get("stdin", True))
         except Exception as exc:
             return AIResult(False, selected_tool, selected_model, error=str(exc), usage=TokenUsage())
+        if not use_stdin:
+            command.append(prompt_text)
 
         workspace = self.config.resolve_path("ai.workspace")
         workspace.mkdir(parents=True, exist_ok=True)
@@ -97,7 +100,7 @@ class AIRunner:
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
-                stdin=subprocess.PIPE,
+                stdin=subprocess.PIPE if use_stdin else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -110,7 +113,7 @@ class AIRunner:
 
         self.registry.register(message_id, process)
         try:
-            stdout, stderr = process.communicate(input=prompt_text, timeout=timeout)
+            stdout, stderr = process.communicate(input=prompt_text if use_stdin else None, timeout=timeout)
         except subprocess.TimeoutExpired:
             self._kill_process_group(process, signal.SIGKILL)
             stdout, stderr = process.communicate()

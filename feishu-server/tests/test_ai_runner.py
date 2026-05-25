@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from services.ai_runner import parse_output
+from services.ai_runner import AIRunner, parse_output
 
 
 class ParseOutputTests(unittest.TestCase):
@@ -85,6 +88,55 @@ class ParseOutputTests(unittest.TestCase):
         result = parse_output("codebuddy", stdout)
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "rate limited")
+
+    def test_non_stdin_tool_gets_prompt_as_argument(self):
+        calls = {}
+
+        class FakeConfig:
+            def __init__(self, workspace: Path) -> None:
+                self.workspace = workspace
+
+            def current_tool(self):
+                return "codebuddy"
+
+            def resolve_model(self, tool):
+                return "deepseek-v4-flash"
+
+            def tool_config(self, tool):
+                return {
+                    "command": "codebuddy",
+                    "args": ["--print", "--model", "{model}", "--output-format", "stream-json"],
+                    "resume_args": ["--resume", "{session_id}"],
+                    "stdin": False,
+                }
+
+            def resolve_path(self, dotted):
+                return self.workspace
+
+            def get(self, dotted, default=None):
+                return 10 if dotted == "ai.timeout_seconds" else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                calls["communicate_input"] = input
+                return '{"type":"result","result":"OK","session_id":"s1"}\n', ""
+
+        def fake_popen(command, **kwargs):
+            calls["command"] = command
+            calls["kwargs"] = kwargs
+            return FakeProcess()
+
+        with TemporaryDirectory() as tmp, patch("services.ai_runner.subprocess.Popen", fake_popen):
+            result = AIRunner(FakeConfig(Path(tmp))).run({"user_input": "hi"}, "m1", tool="codebuddy")
+
+        self.assertTrue(result.ok)
+        self.assertIsNone(calls["kwargs"]["stdin"])
+        self.assertIsNone(calls["communicate_input"])
+        self.assertEqual(calls["command"][:5], ["codebuddy", "--print", "--model", "deepseek-v4-flash", "--output-format"])
+        self.assertIn('"user_input": "hi"', calls["command"][-1])
 
 
 if __name__ == "__main__":

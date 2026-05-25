@@ -59,9 +59,9 @@
       },
       "codebuddy": {
         "command": "codebuddy",
-        "args": ["--model", "{model}", "--output-format", "stream-json"],
+        "args": ["--print", "--model", "{model}", "--output-format", "stream-json"],
         "resume_args": ["--resume", "{session_id}"],
-        "stdin": true,
+        "stdin": false,
         "default_model": "deepseek-v4-flash",
         "aliases": {
           "default": "deepseek-v4-flash",
