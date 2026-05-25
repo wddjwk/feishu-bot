@@ -50,24 +50,27 @@ def setup_logging(config: Config) -> None:
 def send_startup_notifications(config: Config, messenger: Messenger) -> None:
     logger = logging.getLogger(__name__)
     maintainer = resolve_maintainer_open_id(config, messenger)
-    if maintainer:
-        card = cards.build_generic_card("FeishuBot 已启动", f"服务器已启动。\n\n当前版本：`{config.version()}`", "green")
-        threading.Timer(3.0, lambda: _safe_send_card(messenger, maintainer, "open_id", card)).start()
-    else:
-        logger.warning("startup notification skipped: maintainer open_id is not configured or resolvable")
+    pending_data: dict[str, str] = {}
     if PENDING_RESTART_PATH.exists():
         try:
-            data = json.loads(PENDING_RESTART_PATH.read_text(encoding="utf-8"))
+            loaded = json.loads(PENDING_RESTART_PATH.read_text(encoding="utf-8"))
+            pending_data = loaded if isinstance(loaded, dict) else {}
         except json.JSONDecodeError:
             PENDING_RESTART_PATH.unlink(missing_ok=True)
-            return
-        receive_id = data.get("receive_id") or maintainer
-        receive_id_type = data.get("receive_id_type") or "open_id"
-        if receive_id:
-            content = data.get("reply_text") or "服务已完成延迟重启。"
-            card = cards.build_generic_card("FeishuBot 重启完成", content, "green")
-            threading.Timer(3.0, lambda: _safe_send_card(messenger, receive_id, receive_id_type, card)).start()
+            pending_data = {}
         PENDING_RESTART_PATH.unlink(missing_ok=True)
+
+    receive_id = pending_data.get("receive_id") or maintainer
+    receive_id_type = pending_data.get("receive_id_type") or "open_id"
+    if not receive_id:
+        logger.warning("startup notification skipped: maintainer open_id is not configured or resolvable")
+        return
+
+    lines = [f"服务器已启动。", "", f"当前版本：`{config.version()}`"]
+    if pending_data.get("reply_text"):
+        lines.extend(["", pending_data["reply_text"]])
+    card = cards.build_generic_card("FeishuBot 已启动", "\n".join(lines), "green")
+    threading.Timer(3.0, lambda: _safe_send_card(messenger, receive_id, receive_id_type, card)).start()
 
 
 def resolve_maintainer_open_id(config: Config, messenger: Messenger) -> str:

@@ -125,7 +125,8 @@ class MessageHandler(BaseHandler):
             return
 
         self._delete_reaction(message_id, reaction_id)
-        self._add_done_reaction(message_id)
+        # Keep the done-reaction hook for future re-enable, but only show OnIt for now.
+        # self._add_done_reaction(message_id)
         if result.session_id:
             self._save_session_mappings(message, reply, result)
 

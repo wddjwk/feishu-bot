@@ -7,6 +7,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,29 +40,73 @@ class AIResult:
     stderr: str = ""
 
 
+@dataclass
+class ActiveProcessInfo:
+    message_id: str
+    pid: int
+    tool: str
+    model: str
+    started_at: float
+
+
 class ActiveProcessRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._info: dict[str, ActiveProcessInfo] = {}
 
-    def register(self, message_id: str, process: subprocess.Popen[str]) -> None:
+    def register(self, message_id: str, process: subprocess.Popen[str], *, tool: str, model: str) -> None:
         with self._lock:
             self._processes[message_id] = process
+            self._info[message_id] = ActiveProcessInfo(
+                message_id=message_id,
+                pid=process.pid,
+                tool=tool,
+                model=model,
+                started_at=time.time(),
+            )
 
     def unregister(self, message_id: str) -> None:
         with self._lock:
             self._processes.pop(message_id, None)
+            self._info.pop(message_id, None)
 
-    def kill(self, message_id: str) -> bool:
+    def running(self) -> list[dict[str, Any]]:
         with self._lock:
-            process = self._processes.get(message_id)
+            now = time.time()
+            items = []
+            for message_id, info in self._info.items():
+                process = self._processes.get(message_id)
+                if not process or process.poll() is not None:
+                    continue
+                items.append(
+                    {
+                        "message_id": info.message_id,
+                        "pid": info.pid,
+                        "tool": info.tool,
+                        "model": info.model,
+                        "elapsed_seconds": int(now - info.started_at),
+                    }
+                )
+            return items
+
+    def kill(self, identifier: str) -> str | None:
+        with self._lock:
+            message_id = self._resolve_locked(identifier)
+            process = self._processes.get(message_id or "")
         if not process or process.poll() is not None:
-            return False
+            return None
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
         except ProcessLookupError:
-            return False
-        return True
+            return None
+        return message_id
+
+    def _resolve_locked(self, identifier: str) -> str | None:
+        if identifier in self._processes:
+            return identifier
+        matches = [message_id for message_id in self._processes if message_id.startswith(identifier)]
+        return matches[0] if len(matches) == 1 else None
 
 
 class AIRunner:
@@ -69,8 +114,11 @@ class AIRunner:
         self.config = config
         self.registry = ActiveProcessRegistry()
 
-    def kill(self, message_id: str) -> bool:
-        return self.registry.kill(message_id)
+    def kill(self, identifier: str) -> str | None:
+        return self.registry.kill(identifier)
+
+    def running(self) -> list[dict[str, Any]]:
+        return self.registry.running()
 
     def run(
         self,
@@ -111,7 +159,7 @@ class AIRunner:
         except OSError as exc:
             return AIResult(False, selected_tool, selected_model, error=f"failed to start AI process: {exc}", usage=TokenUsage())
 
-        self.registry.register(message_id, process)
+        self.registry.register(message_id, process, tool=selected_tool, model=selected_model)
         try:
             stdout, stderr = process.communicate(input=prompt_text if use_stdin else None, timeout=timeout)
         except subprocess.TimeoutExpired:

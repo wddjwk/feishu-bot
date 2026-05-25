@@ -17,7 +17,7 @@ class FakeConfig:
     def get(self, dotted: str, default=None):
         values = {
             "feishu.reaction_processing": "",
-            "feishu.reaction_done": "",
+            "feishu.reaction_done": "DONE",
             "prompt.reply_chain_limit": 20,
             "prompt.thread_message_limit": 50,
         }
@@ -36,6 +36,7 @@ class FakeConfig:
 class FakeMessenger:
     def __init__(self) -> None:
         self.replies: list[dict] = []
+        self.reactions: list[dict] = []
 
     def reply_card(self, message_id: str, card: dict, *, reply_in_thread: bool | None = None):
         self.replies.append({"message_id": message_id, "reply_in_thread": reply_in_thread, "card": card})
@@ -53,6 +54,7 @@ class FakeMessenger:
         return []
 
     def add_reaction(self, *_args, **_kwargs):
+        self.reactions.append({"args": _args, "kwargs": _kwargs})
         return None
 
     def delete_reaction(self, *_args, **_kwargs):
@@ -131,6 +133,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
         self.assertFalse(messenger.replies[0]["reply_in_thread"])
         self.assertEqual(store.saved[0]["key"], "bot-m1")
         self.assertEqual(len(store.saved), 1)
+        self.assertEqual(messenger.reactions, [])
 
     def test_thread_followup_resumes_and_replies_in_thread(self):
         messenger = FakeMessenger()

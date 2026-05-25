@@ -133,11 +133,7 @@ def _timer(ctx: CommandContext) -> CommandResponse:
     items = ctx.scheduler.list_tasks() if ctx.scheduler else []
     if not items:
         return CommandResponse(cards.build_generic_card("定时任务", "当前没有定时任务。", "blue"))
-    lines = []
-    for item in items:
-        status = "启用" if item.get("enabled", True) else "停用"
-        lines.append(f"- `{item['id']}` `{item['cron']}` {item['type']} {status}：{item.get('name', '')}")
-    return CommandResponse(cards.build_generic_card("定时任务", "\n".join(lines), "blue"))
+    return CommandResponse(cards.build_timer_list_card(items))
 
 
 @registry.prefix("/timer-rm", "删除指定定时任务，例如 /timer-rm task-id")
@@ -151,12 +147,21 @@ def _timer_rm(ctx: CommandContext) -> CommandResponse:
     return CommandResponse(cards.build_generic_card("定时任务已删除", f"`{parts[1].strip()}`", "green"))
 
 
-@registry.exact(["/kill"], "终止被回复消息关联的 AI 分析进程")
+@registry.exact(["/running"], "查看当前运行中的 AI 分析任务")
+def _running(ctx: CommandContext) -> CommandResponse:
+    items = ctx.ai_runner.running()
+    if not items:
+        return CommandResponse(cards.build_generic_card("运行中的 AI 分析", "当前没有运行中的任务。", "blue"))
+    return CommandResponse(cards.build_running_tasks_card(items))
+
+
+@registry.prefix("/kill", "终止 AI 分析进程，例如 /kill <id>，回复消息时可直接 /kill")
 def _kill(ctx: CommandContext) -> CommandResponse:
-    target_id = ctx.message.get("parent_id")
+    parts = ctx.text.split(maxsplit=1)
+    target_id = parts[1].strip() if len(parts) > 1 else ctx.message.get("parent_id")
     if not target_id:
-        return CommandResponse(cards.build_error_card("终止失败", "`/kill` 需要回复某条正在分析的消息。"))
-    killed = ctx.ai_runner.kill(target_id)
-    if not killed:
-        return CommandResponse(cards.build_error_card("终止失败", "没有找到该消息关联的运行中 AI 进程。"))
-    return CommandResponse(cards.build_generic_card("已终止 AI 分析", f"消息 `{target_id}` 的分析进程已被终止。", "green"))
+        return CommandResponse(cards.build_error_card("终止失败", "请提供 `/running` 中显示的任务 ID；回复正在分析的消息时也可以直接发送 `/kill`。"))
+    killed_id = ctx.ai_runner.kill(target_id)
+    if not killed_id:
+        return CommandResponse(cards.build_error_card("终止失败", f"没有找到运行中的 AI 进程：`{target_id}`。"))
+    return CommandResponse(cards.build_error_card("已终止 AI 分析", f"已向任务 `{killed_id}` 发送终止信号。"))
