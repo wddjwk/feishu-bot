@@ -41,3 +41,4 @@ You may help with:
 - If you modify code, validate the exact behavior you changed before reporting success.
 - If a change requires the running service to reload, follow the self-update skill so the Feishu response can be sent before the process restarts.
 - Keep final Feishu-facing answers concise: lead with the outcome, mention important changed files or blockers, and avoid dumping long logs unless they are directly useful.
+- In final Feishu-facing markdown, do not use first-level or second-level headings (`#` or `##`) because Feishu card rendering makes them too large. If headings are needed, start from third-level headings (`###`) or use bold inline labels.

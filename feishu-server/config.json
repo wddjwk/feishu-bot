@@ -20,7 +20,7 @@
     "tools": {
       "qoder": {
         "command": "qodercli",
-        "args": ["--model", "{model}", "--output-format", "stream-json"],
+        "args": ["--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
         "resume_args": ["--resume", "{session_id}"],
         "stdin": true,
         "default_model": "DeepSeek-V4-Flash",
@@ -33,7 +33,7 @@
       },
       "claude": {
         "command": "claude",
-        "args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print"],
+        "args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print", "--dangerously-skip-permissions"],
         "resume_args": ["--resume", "{session_id}"],
         "stdin": true,
         "default_model": "deepseek-v4-flash",
@@ -46,7 +46,7 @@
       },
       "copilot": {
         "command": "copilot",
-        "args": ["--model", "{model}", "--output-format", "json", "--no-ask-user"],
+        "args": ["--model", "{model}", "--output-format", "json", "--no-ask-user", "--allow-all"],
         "resume_args": ["--resume", "{session_id}"],
         "stdin": true,
         "default_model": "claude-sonnet-4.6",
@@ -59,7 +59,7 @@
       },
       "codebuddy": {
         "command": "codebuddy",
-        "args": ["--print", "--model", "{model}", "--output-format", "stream-json"],
+        "args": ["--print", "--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
         "resume_args": ["--resume", "{session_id}"],
         "stdin": false,
         "default_model": "deepseek-v4-flash",

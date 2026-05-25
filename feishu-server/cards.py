@@ -5,10 +5,10 @@ from typing import Any
 
 
 TOOL_ICONS = {
-    "qoder": "⚡",
+    "qoder": "💻",
     "claude": "🧠",
-    "copilot": "🤖",
-    "codebuddy": "🛠️",
+    "copilot": "🛩️",
+    "codebuddy": "🤝",
 }
 
 
@@ -77,7 +77,9 @@ def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dic
     display_tool = tool.capitalize()
     title = f"{TOOL_ICONS.get(tool, '🤖')}{display_tool} {model}"
     elements = [markdown_element(result)]
-    if thinking.strip():
+    thinking_text = thinking.strip()
+    if thinking_text:
+        thinking_title = f"分析过程 ({len(thinking_text)}字)"
         elements.extend(
             [
                 {"tag": "hr"},
@@ -85,7 +87,7 @@ def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dic
                     "tag": "collapsible_panel",
                     "expanded": False,
                     "header": {
-                        "title": {"tag": "plain_text", "content": "完整分析过程"},
+                        "title": {"tag": "plain_text", "content": thinking_title},
                         "vertical_align": "center",
                         "icon": {
                             "tag": "standard_icon",
@@ -99,7 +101,7 @@ def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dic
                     "border": {"color": "grey", "corner_radius": "5px"},
                     "vertical_spacing": "8px",
                     "padding": "8px 8px 8px 8px",
-                    "elements": [plain_text_element(thinking)],
+                    "elements": [plain_text_element(thinking_text)],
                 },
             ]
         )
