@@ -24,7 +24,7 @@ Self-updates must use `./manager deferred-restart 5`, not direct restart, so the
 
 Default runtime configuration is `claude + deepseek-v4-flash` with a 36000 second analysis timeout. AI subprocesses run from `agent-workspace`, not from the project source directory.
 
-Scheduler usage is documented for agents in `agent-workspace/.claude/skill/feishu-scheduler/SKILL.md`. Safe self-update and deferred restart usage is documented in `agent-workspace/.claude/skill/feishu-self-update/SKILL.md`.
+Scheduler usage is documented for agents in `agent-workspace/.claude/skills/feishu-scheduler/SKILL.md`. Safe self-update and deferred restart usage is documented in `agent-workspace/.claude/skills/feishu-self-update/SKILL.md`. The singular `agent-workspace/.claude/skill` path is kept as a compatibility symlink.
 
 ## Official docs checked
 

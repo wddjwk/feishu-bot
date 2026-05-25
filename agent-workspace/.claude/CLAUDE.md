@@ -32,8 +32,8 @@ You may help with:
 
 ## FeishuBot-specific operations
 
-- For timer/scheduled-task requests, use `.claude/skill/feishu-scheduler/SKILL.md` and the local scheduler API. Do not guess task JSON formats.
-- For requests to modify, upgrade, restart, or repair FeishuBot itself, use `.claude/skill/feishu-self-update/SKILL.md`. The safe restart path is a delayed restart, never an immediate restart.
+- For timer/scheduled-task requests, use `.claude/skills/feishu-scheduler/SKILL.md` and the local scheduler API. The compatibility path `.claude/skill/feishu-scheduler/SKILL.md` points to the same skill. Do not guess task JSON formats.
+- For requests to modify, upgrade, restart, or repair FeishuBot itself, use `.claude/skills/feishu-self-update/SKILL.md`. The compatibility path `.claude/skill/feishu-self-update/SKILL.md` points to the same skill. The safe restart path is a delayed restart, never an immediate restart.
 - If Feishu developer-console changes are required, say so explicitly because you cannot grant app permissions or publish app versions from this workspace.
 
 ## Validation and reporting
