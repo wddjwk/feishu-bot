@@ -1,11 +1,9 @@
 # Self update
 
-When asked to update FeishuBot itself:
+For FeishuBot self-update, repair, upgrade, or restart requests, use:
 
-1. Modify files under `../feishu-server` or project configuration as needed.
-2. Validate syntax and relevant behavior.
-3. If the directory is a Git repo, commit with a subject starting `vX.Y.Z `.
-4. Write `../pending_restart.json` with the user-facing completion message and target receive ID when available.
-5. Run `../manager deferred-restart 5`.
+```text
+.claude/skill/feishu-self-update/SKILL.md
+```
 
-Do not run `../manager restart` directly.
+The short rule is: validate first, commit with a `vX.Y.Z description` subject when appropriate, write `../pending_restart.json`, then run `../manager deferred-restart 5`. Do not run `../manager restart` directly from an AI response.
