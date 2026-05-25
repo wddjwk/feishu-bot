@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_DIR="$ROOT/feishu-server"
+PID_FILE="$ROOT/.server.pid"
+VENV_DIR="$ROOT/.venv"
+PY="$VENV_DIR/bin/python"
+PIP_INDEX="https://mirrors.aliyun.com/pypi/simple"
+
+ensure_venv() {
+  if [[ ! -x "$PY" ]]; then
+    if command -v uv >/dev/null 2>&1; then
+      UV_DEFAULT_INDEX="$PIP_INDEX" uv venv "$VENV_DIR"
+      UV_DEFAULT_INDEX="$PIP_INDEX" uv pip install --python "$PY" -r "$SERVER_DIR/requirements.txt"
+    else
+      python3 -m venv "$VENV_DIR"
+      "$VENV_DIR/bin/pip" install -i "$PIP_INDEX" -r "$SERVER_DIR/requirements.txt"
+    fi
+  fi
+}
+
+install_hooks() {
+  if [[ -d "$ROOT/.git" ]]; then
+    mkdir -p "$ROOT/.git/hooks"
+    cp "$ROOT/hooks/commit-msg" "$ROOT/.git/hooks/commit-msg"
+    chmod +x "$ROOT/.git/hooks/commit-msg"
+  fi
+}
+
+is_running() {
+  [[ -f "$PID_FILE" ]] || return 1
+  local pid
+  pid="$(cat "$PID_FILE")"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+start() {
+  if is_running; then
+    echo "FeishuBot is already running: $(cat "$PID_FILE")"
+    return 0
+  fi
+  ensure_venv
+  install_hooks
+  mkdir -p "$SERVER_DIR/data" "$SERVER_DIR/logs" "$ROOT/agent-workspace/download"
+  cd "$SERVER_DIR"
+  setsid "$PY" main.py >> "$SERVER_DIR/logs/manager.out" 2>&1 &
+  echo "$!" > "$PID_FILE"
+  echo "FeishuBot started: $(cat "$PID_FILE")"
+}
+
+stop() {
+  if ! is_running; then
+    echo "FeishuBot is not running"
+    rm -f "$PID_FILE"
+    return 0
+  fi
+  local pid
+  pid="$(cat "$PID_FILE")"
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$PID_FILE"
+      echo "FeishuBot stopped"
+      return 0
+    fi
+    sleep 0.5
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  rm -f "$PID_FILE"
+  echo "FeishuBot killed after graceful stop timeout"
+}
+
+status() {
+  if ! is_running; then
+    echo "FeishuBot is not running"
+    return 1
+  fi
+  local pid
+  pid="$(cat "$PID_FILE")"
+  ps -p "$pid" -o pid=,etime=,rss=,cmd=
+}
+
+show_log() {
+  mkdir -p "$SERVER_DIR/logs"
+  local latest
+  latest="$(find "$SERVER_DIR/logs" -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
+  [[ -n "$latest" ]] || latest="$SERVER_DIR/logs/manager.out"
+  touch "$latest"
+  tail -n 200 -f "$latest"
+}
+
+deferred_restart() {
+  local delay="${1:-5}"
+  (sleep "$delay"; "$ROOT/manager" restart) >/dev/null 2>&1 &
+  echo "Deferred restart scheduled after ${delay}s"
+}
+
+case "${1:-}" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  deferred-restart) deferred_restart "${2:-5}" ;;
+  status) status ;;
+  log) show_log ;;
+  *) echo "Usage: $0 {start|stop|restart|deferred-restart [seconds]|status|log}" >&2; exit 2 ;;
+esac

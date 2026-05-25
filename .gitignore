@@ -1,0 +1,10 @@
+.env
+.venv/
+.server.pid
+pending_restart.json
+feishu-server/data/
+feishu-server/logs/
+agent-workspace/download/
+__pycache__/
+*.py[cod]
+*.log

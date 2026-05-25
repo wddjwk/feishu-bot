@@ -1,0 +1,93 @@
+{
+  "version": "v1.0.0",
+  "feishu": {
+    "base_url": "https://open.feishu.cn/open-apis",
+    "reply_in_thread": false,
+    "reaction_processing": "OnIt",
+    "reaction_done": "DONE",
+    "maintainer_name": ""
+  },
+  "ai": {
+    "tool": "claude",
+    "timeout_seconds": 36000,
+    "workspace": "../agent-workspace",
+    "current_models": {
+      "qoder": "DeepSeek-V4-Flash",
+      "claude": "deepseek-v4-flash",
+      "copilot": "claude-sonnet-4.6",
+      "codebuddy": "deepseek-v4-flash"
+    },
+    "tools": {
+      "qoder": {
+        "command": "qodercli",
+        "args": ["--model", "{model}", "--output-format", "stream-json"],
+        "resume_args": ["--resume", "{session_id}"],
+        "stdin": true,
+        "default_model": "DeepSeek-V4-Flash",
+        "aliases": {
+          "default": "DeepSeek-V4-Flash",
+          "max": "DeepSeek-V4",
+          "middle": "DeepSeek-V4-Flash",
+          "min": "DeepSeek-V4-Flash"
+        }
+      },
+      "claude": {
+        "command": "claude",
+        "args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print"],
+        "resume_args": ["--resume", "{session_id}"],
+        "stdin": true,
+        "default_model": "deepseek-v4-flash",
+        "aliases": {
+          "default": "deepseek-v4-flash",
+          "max": "deepseek-v4",
+          "middle": "deepseek-v4-flash",
+          "min": "deepseek-v4-flash"
+        }
+      },
+      "copilot": {
+        "command": "copilot",
+        "args": ["--model", "{model}", "--output-format", "json", "--no-ask-user"],
+        "resume_args": ["--resume", "{session_id}"],
+        "stdin": true,
+        "default_model": "claude-sonnet-4.6",
+        "aliases": {
+          "default": "claude-sonnet-4.6",
+          "max": "claude-opus-4.7",
+          "middle": "claude-sonnet-4.6",
+          "min": "claude-haiku-4.5"
+        }
+      },
+      "codebuddy": {
+        "command": "codebuddy",
+        "args": ["--model", "{model}", "--output-format", "stream-json"],
+        "resume_args": ["--resume", "{session_id}"],
+        "stdin": true,
+        "default_model": "deepseek-v4-flash",
+        "aliases": {
+          "default": "deepseek-v4-flash",
+          "max": "deepseek-v4",
+          "middle": "deepseek-v4-flash",
+          "min": "deepseek-v4-flash"
+        }
+      }
+    }
+  },
+  "prompt": {
+    "reply_chain_limit": 20,
+    "thread_message_limit": 50,
+    "download_dir": "../agent-workspace/download"
+  },
+  "session_store": {
+    "path": "data/session_map.json",
+    "max_entries": 500
+  },
+  "scheduler": {
+    "port": 8066,
+    "data_file": "data/tasks.json",
+    "tick_seconds": 60
+  },
+  "logging": {
+    "level": "INFO",
+    "dir": "logs"
+  }
+}

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+subject="$(head -n 1 "$1")"
+if [[ ! "$subject" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\ .+ ]]; then
+  echo "commit subject must start with: vX.Y.Z description" >&2
+  echo "example: v0.1.0 initial implementation" >&2
+  exit 1
+fi
