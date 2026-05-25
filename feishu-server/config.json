@@ -8,14 +8,14 @@
     "maintainer_name": ""
   },
   "ai": {
-    "tool": "claude",
+    "tool": "codebuddy",
     "timeout_seconds": 36000,
     "workspace": "../agent-workspace",
     "current_models": {
       "qoder": "DeepSeek-V4-Flash",
       "claude": "deepseek-v4-flash",
       "copilot": "claude-sonnet-4.6",
-      "codebuddy": "deepseek-v4-flash"
+      "codebuddy": "deepseek-v4-pro"
     },
     "tools": {
       "qoder": {
