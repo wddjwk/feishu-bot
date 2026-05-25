@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 TOOL_ICONS = {
-    "qoder": "💻",
+    "qoder": "🖥️",
     "claude": "🧠",
-    "copilot": "🛩️",
-    "codebuddy": "🤝",
+    "copilot": "🤖",
+    "codebuddy": "🐇",
 }
 
 MAX_SECTION_CHARS = 100_000
