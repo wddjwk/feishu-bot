@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import subprocess
 import threading
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from config import Config
+from config import Config, ConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,66 @@ class ActiveProcessInfo:
     tool: str
     model: str
     started_at: float
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    command: str
+    base_args: tuple[str, ...]
+    session_args: tuple[str, ...]
+    resume_args: tuple[str, ...]
+    prompt_transport: str
+    output_parser: str
+
+    @classmethod
+    def from_config(cls, name: str, config: Config) -> "ToolSpec":
+        raw = config.tool_config(name)
+        command = str(raw.get("command") or name).strip()
+        if not command:
+            raise ConfigError(f"AI 工具 {name} 缺少 command")
+        base_args = cls._args(raw.get("base_args", raw.get("args", [])), name, "base_args")
+        session_args = cls._args(raw.get("session_args", []), name, "session_args")
+        resume_args = cls._args(raw.get("resume_args", []), name, "resume_args")
+        transport = raw.get("prompt_transport")
+        if transport is None:
+            transport = "stdin" if bool(raw.get("stdin", True)) else "argument"
+        prompt_transport = str(transport)
+        if prompt_transport not in {"stdin", "argument"}:
+            raise ConfigError(f"AI 工具 {name} 的 prompt_transport 必须为 stdin 或 argument")
+        parser = raw.get("output_parser")
+        if parser is None:
+            parser = "copilot_json" if name == "copilot" else "stream_json"
+        output_parser = str(parser)
+        if output_parser not in {"stream_json", "copilot_json"}:
+            raise ConfigError(f"AI 工具 {name} 使用了不支持的 output_parser：{output_parser}")
+        return cls(name, command, base_args, session_args, resume_args, prompt_transport, output_parser)
+
+    def build_command(self, model: str, session_id: str | None, resume_session_id: str | None) -> list[str]:
+        values = {"model": model, "session_id": resume_session_id or session_id or ""}
+        args = self._render(self.base_args, values)
+        if resume_session_id:
+            if not self.resume_args:
+                raise ConfigError(f"AI 工具 {self.name} 未配置 resume_args，无法续接会话")
+            args.extend(self._render(self.resume_args, values))
+        elif session_id:
+            if not self.session_args:
+                raise ConfigError(f"AI 工具 {self.name} 未配置 session_args，无法创建指定会话")
+            args.extend(self._render(self.session_args, values))
+        return [self.command, *args]
+
+    @staticmethod
+    def _args(value: Any, tool: str, field: str) -> tuple[str, ...]:
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ConfigError(f"AI 工具 {tool} 的 {field} 必须是字符串数组")
+        return tuple(value)
+
+    @staticmethod
+    def _render(args: tuple[str, ...], values: dict[str, str]) -> list[str]:
+        try:
+            return [arg.format(**values) for arg in args]
+        except (IndexError, KeyError, ValueError) as exc:
+            raise ConfigError(f"AI 命令参数模板无效：{exc}") from exc
 
 
 class ActiveProcessRegistry:
@@ -115,10 +176,19 @@ class AIRunner:
         self.registry = ActiveProcessRegistry()
 
     def kill(self, identifier: str) -> str | None:
-        return self.registry.kill(identifier)
+        message_id = self.registry.kill(identifier)
+        if message_id:
+            logger.info("已向 AI 进程发送终止信号：消息=%s", message_id)
+        else:
+            logger.warning("未找到可终止的 AI 进程：标识=%s", identifier)
+        return message_id
 
     def running(self) -> list[dict[str, Any]]:
         return self.registry.running()
+
+    def supports_explicit_session(self, tool: str | None = None) -> bool:
+        selected_tool = tool or self.config.current_tool()
+        return bool(ToolSpec.from_config(selected_tool, self.config).session_args)
 
     def run(
         self,
@@ -127,44 +197,89 @@ class AIRunner:
         *,
         tool: str | None = None,
         model: str | None = None,
+        session_id: str | None = None,
         resume_session_id: str | None = None,
+        timeout_seconds: int | None = None,
     ) -> AIResult:
-        selected_tool = tool or self.config.current_tool()
-        selected_model = model or self.config.resolve_model(selected_tool)
-        prompt_text = prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2)
         try:
-            command = self._build_command(selected_tool, selected_model, resume_session_id)
-            use_stdin = bool(self.config.tool_config(selected_tool).get("stdin", True))
-        except Exception as exc:
-            return AIResult(False, selected_tool, selected_model, error=str(exc), usage=TokenUsage())
-        if not use_stdin:
+            selected_tool = tool or self.config.current_tool()
+            selected_model = model or self.config.resolve_model(selected_tool)
+            if session_id and resume_session_id:
+                return AIResult(
+                    False,
+                    selected_tool,
+                    selected_model,
+                    error="一次 AI 执行不能同时创建会话和续接会话",
+                    usage=TokenUsage(),
+                )
+            spec = ToolSpec.from_config(selected_tool, self.config)
+            command = spec.build_command(selected_model, session_id, resume_session_id)
+            timeout = int(timeout_seconds if timeout_seconds is not None else self.config.get("ai.timeout_seconds", 600))
+            if timeout <= 0:
+                raise ValueError("AI 超时时间必须大于 0 秒")
+        except (ConfigError, KeyError, IndexError, TypeError, ValueError) as exc:
+            logger.error("无法准备 AI 执行：%s", exc)
+            return AIResult(False, tool or "", model or "", error=str(exc), usage=TokenUsage())
+        prompt_text = prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2)
+        if spec.prompt_transport == "argument":
+            max_argument_bytes = int(self.config.get("ai.max_argument_prompt_bytes", 100_000))
+            prompt_bytes = len(prompt_text.encode("utf-8"))
+            if max_argument_bytes <= 0:
+                error = "ai.max_argument_prompt_bytes 必须大于 0"
+                logger.error("无法准备 AI 执行：%s", error)
+                return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
+            if prompt_bytes > max_argument_bytes:
+                error = f"AI 提示词为 {prompt_bytes} 字节，超过参数输入上限 {max_argument_bytes} 字节"
+                logger.error("未执行 AI 命令：消息=%s 原因=%s", message_id, error)
+                return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
             command.append(prompt_text)
 
         workspace = self.config.resolve_path("ai.workspace")
         workspace.mkdir(parents=True, exist_ok=True)
-        timeout = int(self.config.get("ai.timeout_seconds", 600))
-        logger.info("running AI tool=%s model=%s message_id=%s cwd=%s", selected_tool, selected_model, message_id, workspace)
+        logger.info(
+            "准备执行 AI：消息=%s CLI=%s 模型=%s 会话=%s 续接=%s 输入方式=%s 输出解析=%s 超时=%ss 工作目录=%s",
+            message_id,
+            selected_tool,
+            selected_model,
+            session_id or "（自动）",
+            resume_session_id or "否",
+            spec.prompt_transport,
+            spec.output_parser,
+            timeout,
+            workspace,
+        )
+        logger.info("AI 执行命令：%s", shlex.join(command))
+        logger.info("AI 完整提示词：\n%s", prompt_text or "（空）")
+        started_at = time.monotonic()
         try:
             process = subprocess.Popen(
                 command,
                 cwd=str(workspace),
-                stdin=subprocess.PIPE if use_stdin else None,
+                stdin=subprocess.PIPE if spec.prompt_transport == "stdin" else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 preexec_fn=os.setsid,
             )
         except FileNotFoundError:
-            return AIResult(False, selected_tool, selected_model, error=f"command not found: {command[0]}", usage=TokenUsage())
+            error = f"找不到 AI 命令：{command[0]}"
+            logger.error("%s", error)
+            return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
         except OSError as exc:
-            return AIResult(False, selected_tool, selected_model, error=f"failed to start AI process: {exc}", usage=TokenUsage())
+            error = f"启动 AI 进程失败：{exc}"
+            logger.exception("%s", error)
+            return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
 
         self.registry.register(message_id, process, tool=selected_tool, model=selected_model)
+        logger.info("AI 进程已启动：消息=%s PID=%s", message_id, process.pid)
         try:
-            stdout, stderr = process.communicate(input=prompt_text if use_stdin else None, timeout=timeout)
+            stdout, stderr = process.communicate(input=prompt_text if spec.prompt_transport == "stdin" else None, timeout=timeout)
         except subprocess.TimeoutExpired:
             self._kill_process_group(process, signal.SIGKILL)
             stdout, stderr = process.communicate()
+            self._log_process_output(stdout, stderr)
+            elapsed = time.monotonic() - started_at
+            logger.error("AI 进程超时：消息=%s 耗时=%.2fs 超时=%ss", message_id, elapsed, timeout)
             return AIResult(
                 False,
                 selected_tool,
@@ -172,31 +287,51 @@ class AIRunner:
                 thinking=stdout,
                 stderr=stderr,
                 exit_code=process.returncode,
-                error=f"AI process timed out after {timeout}s",
+                error=f"AI 进程在 {timeout} 秒后超时",
                 usage=TokenUsage(),
+                session_id=resume_session_id or session_id,
             )
         finally:
             self.registry.unregister(message_id)
 
-        parsed = parse_output(selected_tool, stdout, stderr)
+        self._log_process_output(stdout, stderr)
+        parsed = parse_output(spec.output_parser, stdout, stderr)
         parsed.tool = selected_tool
         parsed.model = selected_model
         parsed.exit_code = process.returncode
         parsed.stdout = stdout
         parsed.stderr = stderr
+        parsed.session_id = resume_session_id or session_id or parsed.session_id
         if process.returncode != 0 and not parsed.result:
             parsed.ok = False
-            parsed.error = stderr.strip() or f"AI process exited with code {process.returncode}"
+            parsed.error = stderr.strip() or f"AI 进程退出码异常：{process.returncode}"
+        elapsed = time.monotonic() - started_at
+        logger.info(
+            "AI 执行结束：消息=%s PID=%s 退出码=%s 成功=%s 耗时=%.2fs 会话=%s 回复字符=%s 思考字符=%s",
+            message_id,
+            process.pid,
+            process.returncode,
+            parsed.ok,
+            elapsed,
+            parsed.session_id or "（无）",
+            len(parsed.result),
+            len(parsed.thinking),
+        )
         return parsed
 
-    def _build_command(self, tool: str, model: str, resume_session_id: str | None) -> list[str]:
-        tool_cfg = self.config.tool_config(tool)
-        command = str(tool_cfg.get("command") or tool)
-        values = {"model": model, "session_id": resume_session_id or ""}
-        args = [str(arg).format(**values) for arg in tool_cfg.get("args", [])]
-        if resume_session_id:
-            args.extend(str(arg).format(**values) for arg in tool_cfg.get("resume_args", []))
-        return [command, *args]
+    def _build_command(
+        self,
+        tool: str,
+        model: str,
+        session_id: str | None,
+        resume_session_id: str | None,
+    ) -> list[str]:
+        return ToolSpec.from_config(tool, self.config).build_command(model, session_id, resume_session_id)
+
+    @staticmethod
+    def _log_process_output(stdout: str, stderr: str) -> None:
+        logger.info("AI 原始标准输出（完整）：\n%s", stdout or "（空）")
+        logger.info("AI 原始错误输出（完整）：\n%s", stderr or "（空）")
 
     @staticmethod
     def _kill_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
@@ -206,7 +341,7 @@ class AIRunner:
             return
 
 
-def parse_output(tool: str, stdout: str, stderr: str = "") -> AIResult:
+def parse_output(parser: str, stdout: str, stderr: str = "") -> AIResult:
     usage = TokenUsage()
     session_id: str | None = None
     thinking_parts: list[str] = []
@@ -242,7 +377,7 @@ def parse_output(tool: str, stdout: str, stderr: str = "") -> AIResult:
         if process_text:
             thinking_parts.append(process_text)
 
-        if tool == "copilot":
+        if parser in {"copilot", "copilot_json"}:
             if event_type == "reasoning_delta":
                 text = _extract_text(event.get("delta") or event)
                 if text:
@@ -296,13 +431,13 @@ def parse_output(tool: str, stdout: str, stderr: str = "") -> AIResult:
     thinking = "\n".join(part for part in thinking_parts if part).strip()
     return AIResult(
         ok=bool(result) and not saw_error,
-        tool=tool,
+        tool=parser,
         model="",
         thinking=thinking,
         result=result,
         usage=usage,
         session_id=session_id,
-        error="\n".join(error_parts).strip() if saw_error else ("" if result else "AI output did not contain a result"),
+        error="\n".join(error_parts).strip() if saw_error else ("" if result else "AI 输出中未找到最终回复"),
     )
 
 

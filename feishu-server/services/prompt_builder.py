@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PromptBuildResult:
     prompt: dict[str, Any]
-    file_only: bool = False
     attached_files: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -48,6 +47,7 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
         "thread_id": message.get("thread_id") or "",
         "chat_id": message.get("chat_id") or "",
         "chat_type": message.get("chat_type") or "",
+        "mentions": message.get("mentions") if isinstance(message.get("mentions"), list) else body.get("mentions") or [],
         "sender_type": message.get("sender_type") or sender.get("sender_type"),
         "sender_id": sender.get("id") or message.get("sender_id"),
         "raw": message,
@@ -63,9 +63,6 @@ def build_prompt(
     resume: bool = False,
 ) -> PromptBuildResult:
     user_input = extract_text(message).strip()
-    files = extract_files(message)
-    if files and not user_input and not message.get("parent_id") and not message.get("thread_id"):
-        return PromptBuildResult({"user_input": "", "context": {"message_id": message.get("message_id")}}, file_only=True)
 
     if resume:
         attached_files = _download_attachments([message], messenger, config)
@@ -184,7 +181,7 @@ def _download_attachments(messages: list[dict[str, Any]], messenger: Messenger, 
             try:
                 path = messenger.download_message_resource(message_id, file_item["key"], file_item["type"], dest)
             except FeishuApiError as exc:
-                logger.warning("failed to download message resource message_id=%s file=%s: %s", message_id, file_item["key"], exc)
+                logger.warning("下载消息资源失败：消息=%s 文件=%s 错误=%s", message_id, file_item["key"], exc)
                 attached.append({"name": safe_name, "path": "", "note": f"download failed: {exc}"})
                 continue
             attached.append({"name": safe_name, "path": str(path), "note": f"from message {message_id}"})

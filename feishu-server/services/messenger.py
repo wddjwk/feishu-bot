@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -54,6 +55,8 @@ class Messenger:
         self.config = config
         self.token_provider = token_provider
         self.base_url = str(config.get("feishu.base_url")).rstrip("/")
+        self._bot_open_id = ""
+        self._bot_open_id_lock = threading.Lock()
 
     def reply_card(self, message_id: str, card: dict[str, Any], *, reply_in_thread: bool | None = None) -> dict[str, Any]:
         return self.reply_message(message_id, "interactive", card, reply_in_thread=reply_in_thread)
@@ -143,6 +146,21 @@ class Messenger:
         if len(matches) != 1:
             return None
         return matches[0].get("open_id") or matches[0].get("user_id")
+
+    def get_bot_open_id(self) -> str:
+        with self._bot_open_id_lock:
+            if self._bot_open_id:
+                return self._bot_open_id
+            response = self._request_json("GET", "/bot/v3/info")
+            bot = response.get("bot")
+            if not isinstance(bot, dict):
+                data = response.get("data")
+                bot = data.get("bot") if isinstance(data, dict) else None
+            open_id = bot.get("open_id") if isinstance(bot, dict) else None
+            if not isinstance(open_id, str) or not open_id:
+                raise FeishuApiError("bot info response did not include an open_id")
+            self._bot_open_id = open_id
+            return open_id
 
     def add_reaction(self, message_id: str, emoji_type: str) -> str | None:
         data = self._request_json(

@@ -4,12 +4,13 @@
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
     "reaction_processing": "OnIt",
-    "reaction_done": "DONE",
+    "card_width": "half",
     "maintainer_name": ""
   },
   "ai": {
     "tool": "codebuddy",
     "timeout_seconds": 36000,
+    "max_argument_prompt_bytes": 100000,
     "workspace": "../agent-workspace",
     "current_models": {
       "qoder": "DeepSeek-V4-Flash",
@@ -20,9 +21,11 @@
     "tools": {
       "qoder": {
         "command": "qodercli",
-        "args": ["--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+        "base_args": ["--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+        "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
-        "stdin": true,
+        "prompt_transport": "stdin",
+        "output_parser": "stream_json",
         "default_model": "DeepSeek-V4-Flash",
         "aliases": {
           "default": "DeepSeek-V4-Flash",
@@ -33,9 +36,11 @@
       },
       "claude": {
         "command": "claude",
-        "args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print", "--dangerously-skip-permissions"],
+        "base_args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print", "--dangerously-skip-permissions"],
+        "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
-        "stdin": true,
+        "prompt_transport": "stdin",
+        "output_parser": "stream_json",
         "default_model": "deepseek-v4-flash",
         "aliases": {
           "default": "deepseek-v4-flash",
@@ -46,9 +51,11 @@
       },
       "copilot": {
         "command": "copilot",
-        "args": ["--model", "{model}", "--output-format", "json", "--no-ask-user", "--allow-all"],
+        "base_args": ["--model", "{model}", "--output-format", "json", "--no-ask-user", "--allow-all"],
+        "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
-        "stdin": true,
+        "prompt_transport": "stdin",
+        "output_parser": "copilot_json",
         "default_model": "claude-sonnet-4.6",
         "aliases": {
           "default": "claude-sonnet-4.6",
@@ -59,9 +66,11 @@
       },
       "codebuddy": {
         "command": "codebuddy",
-        "args": ["--print", "--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+        "base_args": ["--print", "--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+        "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
-        "stdin": false,
+        "prompt_transport": "argument",
+        "output_parser": "stream_json",
         "default_model": "deepseek-v4-flash",
         "aliases": {
           "default": "deepseek-v4-flash",
@@ -79,15 +88,20 @@
   },
   "session_store": {
     "path": "data/session_map.json",
-    "max_entries": 500
+    "retention_days": 90,
+    "max_links": 500,
+    "cleanup_interval_seconds": 3600
   },
   "scheduler": {
+    "host": "127.0.0.1",
     "port": 8066,
     "data_file": "data/tasks.json",
     "tick_seconds": 60
   },
   "logging": {
     "level": "INFO",
-    "dir": "logs"
+    "dir": "logs",
+    "file_max_bytes": 10485760,
+    "backup_count": 10
   }
 }

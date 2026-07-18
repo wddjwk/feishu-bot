@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import UUID
 
 from handlers.message_handler import MessageHandler
 from services.ai_runner import AIResult
@@ -16,8 +17,7 @@ class FakeConfig:
 
     def get(self, dotted: str, default=None):
         values = {
-            "feishu.reaction_processing": "",
-            "feishu.reaction_done": "DONE",
+            "feishu.reaction_processing": "OnIt",
             "prompt.reply_chain_limit": 20,
             "prompt.thread_message_limit": 50,
         }
@@ -37,6 +37,9 @@ class FakeMessenger:
     def __init__(self) -> None:
         self.replies: list[dict] = []
         self.reactions: list[dict] = []
+        self.deleted_reactions: list[dict] = []
+        self.bot_info_calls = 0
+        self.bot_open_id = "ou_bot"
 
     def reply_card(self, message_id: str, card: dict, *, reply_in_thread: bool | None = None):
         self.replies.append({"message_id": message_id, "reply_in_thread": reply_in_thread, "card": card})
@@ -53,42 +56,68 @@ class FakeMessenger:
     def list_messages(self, *_args, **_kwargs):
         return []
 
-    def add_reaction(self, *_args, **_kwargs):
-        self.reactions.append({"args": _args, "kwargs": _kwargs})
-        return None
+    def add_reaction(self, message_id: str, emoji_type: str):
+        reaction_id = f"reaction-{len(self.reactions) + 1}"
+        self.reactions.append({"message_id": message_id, "emoji_type": emoji_type, "reaction_id": reaction_id})
+        return reaction_id
 
-    def delete_reaction(self, *_args, **_kwargs):
-        return None
+    def delete_reaction(self, message_id: str, reaction_id: str):
+        self.deleted_reactions.append({"message_id": message_id, "reaction_id": reaction_id})
+
+    def get_bot_open_id(self):
+        self.bot_info_calls += 1
+        return self.bot_open_id
+
+    def download_message_resource(self, _message_id, _file_key, _resource_type, dest: Path):
+        return dest
 
 
 class FakeRunner:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def run(self, prompt, message_id, *, tool=None, model=None, resume_session_id=None):
+    def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
         self.calls.append(
             {
                 "prompt": prompt,
                 "message_id": message_id,
                 "tool": tool,
                 "model": model,
+                "session_id": session_id,
                 "resume_session_id": resume_session_id,
             }
         )
-        return AIResult(True, tool or "claude", model or "deepseek-v4-flash", result="done", session_id="new-session")
+        return AIResult(
+            True,
+            tool or "claude",
+            model or "deepseek-v4-flash",
+            result="done",
+            session_id=session_id or resume_session_id,
+        )
+
+    def supports_explicit_session(self, _tool=None):
+        return True
 
 
 class FakeSessionStore:
-    def __init__(self) -> None:
+    def __init__(self, resume_info: dict | None = None) -> None:
         self.saved: list[dict] = []
+        self.resume_info = resume_info
 
     def resolve_for_thread(self, message: dict):
-        if message.get("thread_id"):
-            return {"session_id": "old-session", "tool": "qoder", "model": "DeepSeek-V4-Flash"}
-        return None
+        return self.resume_info if message.get("thread_id") else None
 
-    def set(self, key: str, session_id: str, *, tool: str, model: str, metadata=None) -> None:
-        self.saved.append({"key": key, "session_id": session_id, "tool": tool, "model": model, "metadata": metadata})
+    def set(self, key: str, session_id: str, *, tool: str, model: str, link_type="message", metadata=None) -> None:
+        self.saved.append(
+            {
+                "key": key,
+                "session_id": session_id,
+                "tool": tool,
+                "model": model,
+                "link_type": link_type,
+                "metadata": metadata,
+            }
+        )
 
 
 class ImmediateThread:
@@ -111,7 +140,7 @@ def message_event(message: dict) -> dict:
 
 
 class MessageHandlerFlowTests(unittest.TestCase):
-    def test_normal_reply_does_not_resume_or_reply_in_thread(self):
+    def test_normal_message_starts_explicit_session_and_cleans_processing_reaction(self):
         messenger = FakeMessenger()
         runner = FakeRunner()
         store = FakeSessionStore()
@@ -126,19 +155,26 @@ class MessageHandlerFlowTests(unittest.TestCase):
             }
         )
 
-        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread), patch(
+            "handlers.message_handler.uuid4", return_value=UUID("12345678-1234-5678-1234-567812345678")
+        ):
             handler.handle_event(event)
 
         self.assertIsNone(runner.calls[0]["resume_session_id"])
+        self.assertEqual(runner.calls[0]["session_id"], "12345678-1234-5678-1234-567812345678")
+        self.assertEqual(runner.calls[0]["tool"], "claude")
+        self.assertEqual(runner.calls[0]["model"], "deepseek-v4-flash")
         self.assertFalse(messenger.replies[0]["reply_in_thread"])
-        self.assertEqual(store.saved[0]["key"], "bot-m1")
-        self.assertEqual(len(store.saved), 1)
-        self.assertEqual(messenger.reactions, [])
+        self.assertEqual({item["key"] for item in store.saved}, {"m1", "bot-m1"})
+        self.assertEqual({item["session_id"] for item in store.saved}, {"12345678-1234-5678-1234-567812345678"})
+        self.assertEqual({item["link_type"] for item in store.saved}, {"user_message", "bot_reply"})
+        self.assertEqual(messenger.reactions[0]["emoji_type"], "OnIt")
+        self.assertEqual(messenger.deleted_reactions, [{"message_id": "m1", "reaction_id": "reaction-1"}])
 
-    def test_thread_followup_resumes_and_replies_in_thread(self):
+    def test_thread_followup_resumes_original_cli_model_and_cleans_processing_reaction(self):
         messenger = FakeMessenger()
         runner = FakeRunner()
-        store = FakeSessionStore()
+        store = FakeSessionStore({"session_id": "old-session", "tool": "qoder", "model": "DeepSeek-V4-Flash"})
         handler = MessageHandler(FakeConfig(), messenger, runner, store, scheduler=None)
         event = message_event(
             {
@@ -155,9 +191,193 @@ class MessageHandlerFlowTests(unittest.TestCase):
             handler.handle_event(event)
 
         self.assertEqual(runner.calls[0]["resume_session_id"], "old-session")
+        self.assertIsNone(runner.calls[0]["session_id"])
         self.assertEqual(runner.calls[0]["tool"], "qoder")
+        self.assertEqual(runner.calls[0]["model"], "DeepSeek-V4-Flash")
         self.assertTrue(messenger.replies[0]["reply_in_thread"])
-        self.assertEqual({item["key"] for item in store.saved}, {"bot-m2", "thread-1"})
+        self.assertEqual({item["key"] for item in store.saved}, {"m2", "bot-m2", "thread-1"})
+        self.assertEqual({item["session_id"] for item in store.saved}, {"old-session"})
+        self.assertEqual({item["link_type"] for item in store.saved}, {"user_message", "bot_reply", "thread"})
+        self.assertEqual(messenger.deleted_reactions, [{"message_id": "m2", "reaction_id": "reaction-1"}])
+
+    def test_file_only_message_starts_an_agent(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-file",
+                "message_type": "file",
+                "content": json.dumps({"file_key": "file-key", "file_name": "notes.txt"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(runner.calls[0]["prompt"]["context"]["attached_files"][0]["name"], "notes.txt")
+
+    def test_failed_new_run_does_not_create_resumable_mapping(self):
+        class FailingRunner(FakeRunner):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+                self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
+                return AIResult(False, tool or "claude", model or "deepseek-v4-flash", error="启动失败", session_id=session_id)
+
+        messenger = FakeMessenger()
+        runner = FailingRunner()
+        store = FakeSessionStore()
+        handler = MessageHandler(FakeConfig(), messenger, runner, store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-failed",
+                "message_type": "text",
+                "content": json.dumps({"text": "hi"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(store.saved, [])
+        self.assertEqual(messenger.replies[0]["card"]["header"]["title"]["content"], "⚠️ AI 分析失败")
+
+    def test_tool_without_explicit_session_uses_cli_reported_session_for_mapping(self):
+        class LegacyRunner(FakeRunner):
+            def supports_explicit_session(self, _tool=None):
+                return False
+
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+                self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
+                return AIResult(True, tool or "claude", model or "deepseek-v4-flash", result="done", session_id="native-session")
+
+        messenger = FakeMessenger()
+        runner = LegacyRunner()
+        store = FakeSessionStore()
+        handler = MessageHandler(FakeConfig(), messenger, runner, store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-legacy",
+                "message_type": "text",
+                "content": json.dumps({"text": "hi"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertIsNone(runner.calls[0]["session_id"])
+        self.assertEqual({item["session_id"] for item in store.saved}, {"native-session"})
+
+    def test_group_message_without_bot_mention_is_ignored(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None, bot_open_id="ou_bot")
+        event = message_event(
+            {
+                "message_id": "m-group",
+                "message_type": "text",
+                "content": json.dumps({"text": "hello"}),
+                "chat_type": "group",
+                "mentions": [],
+                "create_time": "2",
+            }
+        )
+
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(messenger.replies, [])
+        self.assertEqual(messenger.reactions, [])
+
+    def test_group_message_mentioning_another_bot_is_ignored(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None, bot_open_id="ou_bot")
+        event = message_event(
+            {
+                "message_id": "m-other-bot",
+                "message_type": "text",
+                "content": json.dumps({"text": "@_user_1 hello"}),
+                "chat_type": "group",
+                "mentions": [{"id": {"open_id": "ou_other_bot"}, "mentioned_type": "bot"}],
+                "create_time": "2",
+            }
+        )
+
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(messenger.replies, [])
+
+    def test_group_bot_mention_uses_bot_info_fallback_and_starts_agent(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-mentioned",
+                "message_type": "text",
+                "content": json.dumps({"text": "@_user_1 hello"}),
+                "chat_type": "group",
+                "mentions": [{"id": {"open_id": "ou_bot"}, "mentioned_type": "bot"}],
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(messenger.bot_info_calls, 1)
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_group_topic_without_bot_mention_is_ignored(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        store = FakeSessionStore({"session_id": "old-session", "tool": "qoder", "model": "DeepSeek-V4-Flash"})
+        handler = MessageHandler(FakeConfig(), messenger, runner, store, scheduler=None, bot_open_id="ou_bot")
+        event = message_event(
+            {
+                "message_id": "m-topic-group",
+                "message_type": "text",
+                "content": json.dumps({"text": "continue"}),
+                "chat_type": "group",
+                "thread_id": "thread-1",
+                "root_id": "bot-root",
+                "mentions": [],
+                "create_time": "2",
+            }
+        )
+
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(messenger.replies, [])
+
+    def test_unmapped_topic_returns_error_without_starting_new_session(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-unmapped",
+                "message_type": "text",
+                "content": json.dumps({"text": "continue"}),
+                "thread_id": "thread-unknown",
+                "root_id": "bot-root",
+                "create_time": "2",
+            }
+        )
+
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertTrue(messenger.replies[0]["reply_in_thread"])
+        self.assertEqual(messenger.replies[0]["card"]["header"]["title"]["content"], "⚠️ 话题会话未找到")
+        self.assertEqual(messenger.deleted_reactions, [{"message_id": "m-unmapped", "reaction_id": "reaction-1"}])
 
 
 if __name__ == "__main__":

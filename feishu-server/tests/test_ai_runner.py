@@ -14,7 +14,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"final answer","usage":{"input_tokens":3,"output_tokens":4}}',
             ]
         )
-        result = parse_output("claude", stdout)
+        result = parse_output("stream_json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.session_id, "s1")
         self.assertEqual(result.result, "final answer")
@@ -29,7 +29,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"ok"}',
             ]
         )
-        result = parse_output("claude", stdout)
+        result = parse_output("stream_json", stdout)
         self.assertIn("📚 Skill scheduler", result.thinking)
         self.assertIn("🛠 Tool bash", result.thinking)
         self.assertEqual(result.result, "ok")
@@ -42,7 +42,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"done","session_id":"abc"}',
             ]
         )
-        result = parse_output("copilot", stdout)
+        result = parse_output("copilot_json", stdout)
         self.assertEqual(result.thinking, "step 1")
         self.assertEqual(result.result, "done")
         self.assertEqual(result.session_id, "abc")
@@ -54,7 +54,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"content_delta","delta":"lo"}',
             ]
         )
-        result = parse_output("copilot", stdout)
+        result = parse_output("copilot_json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "hello")
 
@@ -67,14 +67,14 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","sessionId":"s1","exitCode":0}',
             ]
         )
-        result = parse_output("copilot", stdout)
+        result = parse_output("copilot_json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "OK")
         self.assertEqual(result.session_id, "s1")
         self.assertEqual(result.usage.output_tokens, 4)
 
     def test_plain_stdout_fallback(self):
-        result = parse_output("qoder", "hello\nworld\n")
+        result = parse_output("stream_json", "hello\nworld\n")
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "world")
 
@@ -85,7 +85,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["rate limited"]}',
             ]
         )
-        result = parse_output("codebuddy", stdout)
+        result = parse_output("stream_json", stdout)
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "rate limited")
 
@@ -105,9 +105,11 @@ class ParseOutputTests(unittest.TestCase):
             def tool_config(self, tool):
                 return {
                     "command": "codebuddy",
-                    "args": ["--print", "--model", "{model}", "--output-format", "stream-json"],
+                    "base_args": ["--print", "--model", "{model}", "--output-format", "stream-json"],
+                    "session_args": ["--session-id", "{session_id}"],
                     "resume_args": ["--resume", "{session_id}"],
-                    "stdin": False,
+                    "prompt_transport": "argument",
+                    "output_parser": "stream_json",
                 }
 
             def resolve_path(self, dotted):
@@ -137,6 +139,152 @@ class ParseOutputTests(unittest.TestCase):
         self.assertIsNone(calls["communicate_input"])
         self.assertEqual(calls["command"][:5], ["codebuddy", "--print", "--model", "deepseek-v4-flash", "--output-format"])
         self.assertIn('"user_input": "hi"', calls["command"][-1])
+
+    def test_session_id_is_passed_for_new_sessions_but_not_resumes(self):
+        class FakeConfig:
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": ["--model", "{model}"],
+                    "session_args": ["--session-id", "{session_id}"],
+                    "resume_args": ["--resume", "{session_id}"],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+        runner = AIRunner(FakeConfig())
+        new_command = runner._build_command("claude", "model-a", "new-session", None)
+        resume_command = runner._build_command("claude", "model-a", None, "existing-session")
+
+        self.assertEqual(new_command, ["claude", "--model", "model-a", "--session-id", "new-session"])
+        self.assertEqual(resume_command, ["claude", "--model", "model-a", "--resume", "existing-session"])
+
+    def test_requested_session_id_takes_precedence_over_output_metadata(self):
+        calls = {}
+
+        class FakeConfig:
+            def current_tool(self):
+                return "claude"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": [],
+                    "session_args": ["--session-id", "{session_id}"],
+                    "resume_args": ["--resume", "{session_id}"],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+            def resolve_path(self, _dotted):
+                return Path(".")
+
+            def get(self, _dotted, default=None):
+                return 10 if default is None else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                calls["command_input"] = input
+                return '{"type":"result","result":"OK","session_id":"unexpected-session"}\n', ""
+
+        with patch("services.ai_runner.subprocess.Popen", return_value=FakeProcess()):
+            result = AIRunner(FakeConfig()).run("hello", "m1", session_id="requested-session")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.session_id, "requested-session")
+        self.assertEqual(calls["command_input"], "hello")
+
+    def test_tool_spec_is_reloaded_for_each_execution(self):
+        class MutableConfig:
+            def __init__(self) -> None:
+                self.args = ["--model", "{model}"]
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": self.args,
+                    "session_args": ["--session-id", "{session_id}"],
+                    "resume_args": ["--resume", "{session_id}"],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+        config = MutableConfig()
+        runner = AIRunner(config)
+        first = runner._build_command("claude", "model-a", "session-a", None)
+        config.args = ["--model", "{model}", "--verbose"]
+        second = runner._build_command("claude", "model-a", "session-b", None)
+
+        self.assertNotIn("--verbose", first)
+        self.assertIn("--verbose", second)
+
+    def test_legacy_tool_without_session_args_uses_cli_reported_session(self):
+        class LegacyConfig:
+            def current_tool(self):
+                return "legacy"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "legacy-cli",
+                    "args": ["--model", "{model}"],
+                    "stdin": True,
+                }
+
+            def resolve_path(self, _dotted):
+                return Path(".")
+
+            def get(self, _dotted, default=None):
+                return 10 if default is None else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                return '{"type":"result","result":"OK","session_id":"native-session"}\n', ""
+
+        with patch("services.ai_runner.subprocess.Popen", return_value=FakeProcess()) as popen:
+            runner = AIRunner(LegacyConfig())
+            result = runner.run("hello", "m1")
+
+        self.assertFalse(runner.supports_explicit_session("legacy"))
+        self.assertEqual(result.session_id, "native-session")
+        self.assertNotIn("--session-id", popen.call_args.args[0])
+
+    def test_argument_prompt_limit_prevents_os_argv_failure(self):
+        class FakeConfig:
+            def current_tool(self):
+                return "codebuddy"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "codebuddy",
+                    "base_args": ["--print"],
+                    "prompt_transport": "argument",
+                    "output_parser": "stream_json",
+                }
+
+            def get(self, dotted, default=None):
+                if dotted == "ai.max_argument_prompt_bytes":
+                    return 5
+                return default
+
+        result = AIRunner(FakeConfig()).run("超过上限", "m1")
+
+        self.assertFalse(result.ok)
+        self.assertIn("超过参数输入上限", result.error)
 
 
 if __name__ == "__main__":

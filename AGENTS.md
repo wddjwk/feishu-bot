@@ -6,7 +6,10 @@ FeishuBot is a self-built Feishu application robot. It receives `im.message.rece
 
 - Direct messages and normal reply-chain messages reply back to the current conversation with `reply_in_thread=false`; they start a fresh AI session.
 - Only messages that already have `thread_id` are topic follow-ups. Those messages resolve the previous AI `session_id` from the topic/root bot card mapping, call the CLI with `--resume`, and reply with `reply_in_thread=true`.
+- Every new AI request receives a generated session ID through the configured CLI `session_args`; its user message and bot card message IDs are persisted with the session's CLI and model.
 - Bot reply message IDs are persisted so a user-created topic on that card can resume later; thread IDs are persisted only after an actual topic follow-up.
+- The bot responds to every direct message. In groups, it only responds when the structured `mentions` payload targets its own open ID. Set `FEISHU_BOT_OPEN_ID` to avoid the bot-info lookup fallback.
+- Session data is stored in a versioned JSON document with separate `sessions` and `links` indexes, atomic writes, one-time migration from the former flat entry list with a `.v1.bak` backup, and bounded retention. Tune its limits in `config.json`.
 
 ## Feishu configuration
 
@@ -22,7 +25,11 @@ Use `./manager start|stop|restart|deferred-restart|status|log`. `manager start` 
 
 Self-updates must use `./manager deferred-restart 5`, not direct restart, so the AI response can be sent before the process exits.
 
-Default runtime configuration is `claude + deepseek-v4-flash` with a 36000 second analysis timeout. AI subprocesses run from `agent-workspace`, not from the project source directory.
+The active CLI and model are selected by `config.json` (currently `codebuddy + deepseek-v4-pro`) with a 36000 second analysis timeout. AI subprocesses run from `agent-workspace`, not from the project source directory.
+
+AI tool command syntax stays in `config.json` because CLI flags differ by provider. `base_args` are common invocation flags, `session_args` and `resume_args` define conversation lifecycle flags, `prompt_transport` explicitly chooses `stdin` or a positional `argument`, and `output_parser` selects the supported stream format. `max_argument_prompt_bytes` prevents argument-mode CLIs from exceeding the OS argv limit. The runner logs the complete generated prompt, command, and raw output locally; logs rotate automatically.
+
+Set `feishu.card_width` to `half` for Feishu's default 600px card width or `full` to use `width_mode: fill`. `/reload` applies width changes without a restart.
 
 Scheduler usage is documented for agents in `agent-workspace/.claude/skills/feishu-scheduler/SKILL.md`. Safe self-update and deferred restart usage is documented in `agent-workspace/.claude/skills/feishu-self-update/SKILL.md`. The singular `agent-workspace/.claude/skill` path is kept as a compatibility symlink.
 

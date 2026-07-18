@@ -1,4 +1,5 @@
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,16 @@ class StartupNotificationTests(unittest.TestCase):
         content = messenger.sent[0]["card"]["body"]["elements"][0]["content"]
         self.assertIn("当前版本：`v1.2.3`", content)
         self.assertIn("更新完成", content)
+
+    def test_private_rotating_log_handler_creates_owner_only_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bot.log"
+            handler = main.PrivateRotatingFileHandler(path, maxBytes=1024, backupCount=1, encoding="utf-8")
+            handler.close()
+
+            mode = stat.S_IMODE(path.stat().st_mode)
+
+        self.assertEqual(mode, 0o600)
 
 
 if __name__ == "__main__":

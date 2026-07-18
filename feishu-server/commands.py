@@ -107,6 +107,7 @@ def _model(ctx: CommandContext) -> CommandResponse:
 def _reload(ctx: CommandContext) -> CommandResponse:
     try:
         ctx.config.reload()
+        cards.configure_card_width(str(ctx.config.get("feishu.card_width", "half")))
     except Exception as exc:
         return CommandResponse(cards.build_error_card("配置重载失败", str(exc)))
     return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 读取最新配置。", "green"))

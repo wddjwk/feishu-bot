@@ -33,7 +33,7 @@ class FeishuBotApp:
         event_handler = builder.build()
         log_level = getattr(lark.LogLevel, str(self.config.get("logging.level", "INFO")).upper(), lark.LogLevel.INFO)
         client = lark.ws.Client(self.app_id, self.app_secret, event_handler=event_handler, log_level=log_level)
-        logger.info("starting Feishu websocket client")
+        logger.info("正在启动飞书长连接客户端")
         client.start()
 
     def _on_message_receive(self, data: Any) -> None:
@@ -49,4 +49,4 @@ class FeishuBotApp:
         raw = lark.JSON.marshal(data)
         event = json.loads(raw) if isinstance(raw, str) else raw
         event_type = event.get("schema", "") or event.get("header", {}).get("event_type", "")
-        logger.debug("ignored Feishu event type=%s", event_type)
+        logger.debug("已忽略飞书事件：类型=%s", event_type)

@@ -13,6 +13,16 @@ TOOL_ICONS = {
 MAX_SECTION_CHARS = 100_000
 MARKDOWN_CHUNK_CHARS = 18_000
 PLAIN_TEXT_CHUNK_CHARS = 9_000
+CARD_WIDTHS = {"half", "full"}
+_card_width = "half"
+
+
+def configure_card_width(width: str) -> None:
+    normalized = width.strip().lower()
+    if normalized not in CARD_WIDTHS:
+        raise ValueError(f"feishu.card_width 必须为以下值之一：{', '.join(sorted(CARD_WIDTHS))}")
+    global _card_width
+    _card_width = normalized
 
 
 def _limit_text(text: str, max_chars: int) -> str:
@@ -44,13 +54,15 @@ def normalize_markdown(markdown: str) -> str:
 
 
 def _base_card(title: str, template: str, elements: list[dict[str, Any]], summary: str | None = None) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        "update_multi": True,
+        "summary": {"content": summary or title[:80]},
+    }
+    if _card_width == "full":
+        config["width_mode"] = "fill"
     return {
         "schema": "2.0",
-        "config": {
-            "update_multi": True,
-            "width_mode": "fill",
-            "summary": {"content": summary or title[:80]},
-        },
+        "config": config,
         "header": {
             "template": template,
             "title": {

@@ -1,35 +1,44 @@
 ---
 name: feishu-scheduler
-description: Use this skill whenever the user asks this FeishuBot agent to create, list, inspect, run, update, or delete scheduled tasks/timers/reminders. It explains the local scheduler REST API, cron syntax, agent-vs-shell task shapes, and safe operational rules, so the agent can operate FeishuBot timers correctly instead of guessing endpoint formats.
+description: Use this skill whenever the user asks this FeishuBot agent to create, list, inspect, run, update, or delete scheduled tasks/timers/reminders. It defines the local scheduler REST API, supported cron syntax, and the distinct agent and script task schemas.
 ---
 
 # FeishuBot scheduler tasks
 
-This FeishuBot exposes a local scheduler HTTP API, normally on `http://127.0.0.1:8066`. Use it for user requests like “每天早上提醒我”, “定时跑这个 prompt”, “查看所有 timer”, “删除某个定时任务”, or “手动运行这个任务”.
+FeishuBot exposes a local scheduler API, normally at `http://127.0.0.1:8066`. Use the API rather than editing `feishu-server/data/tasks.json` by hand.
+
+## Task selection
+
+There are exactly two task types:
+
+- `script`: Executes one existing executable script directly with argument-vector execution (`shell=False`). **Prefer this for fixed, simple, deterministic work**, such as checks, reports, file transforms, or reminders with known content.
+- `agent`: Calls an AI CLI with a prompt. Use it only when the task needs reasoning, drafting, research, or other open-ended work.
+
+The scheduler does not accept `shell` tasks or arbitrary command strings. This prevents command interpolation and keeps direct execution distinct from AI prompting.
 
 ## Safety and routing
 
-- Prefer the REST API over editing `feishu-server/data/tasks.json` by hand.
-- Use `GET /api/health` before changes if you are not sure the scheduler is running.
-- Do not create tasks with secrets in prompts, names, or shell commands.
-- For code changes made by the agent itself, use the project’s self-update workflow and `./manager deferred-restart 5`; do not use scheduler shell tasks as a restart shortcut.
-- Send task results to the user’s Feishu `open_id` when available. If the request does not include a target user and the current message context has one, use that.
+- Verify scheduler health with `GET /api/health` before changing tasks when its state is uncertain.
+- Do not put secrets in task names, prompts, script arguments, or task output.
+- Script paths must be relative to `agent-workspace`, must resolve inside that workspace, and must be executable.
+- For server self-updates, use the self-update workflow and `../manager deferred-restart 5`; never use a scheduler task as a restart shortcut.
+- Send results to the Feishu user's `open_id` when it is available.
 
 ## Cron syntax
 
-The scheduler checks once per minute. Supported crontab fields:
+The scheduler evaluates five-field cron expressions once per minute:
 
 ```text
 minute hour day_of_month month day_of_week
 ```
 
-Supported expressions in each field:
+Supported field forms:
 
-- `*` matches every value.
-- `*/N` matches every N units, for example `*/10 * * * *`.
-- `N-M` matches a range.
-- `N,M,K` matches a list.
-- Plain `N` matches one value.
+- `*`
+- `*/N`
+- `N-M`
+- `N,M,K`
+- `N`
 
 Examples:
 
@@ -40,15 +49,7 @@ Examples:
 15 10 1 * *    monthly on day 1 at 10:15
 ```
 
-## REST endpoints
-
-Base URL:
-
-```text
-http://127.0.0.1:8066
-```
-
-Endpoints:
+## REST API
 
 ```text
 GET    /api/health
@@ -60,9 +61,9 @@ DELETE /api/tasks/<id>
 POST   /api/tasks/<id>/run
 ```
 
-## Creating an agent task
+## Creating an AI task
 
-Agent tasks run the configured AI CLI with a prompt, then send the answer back to Feishu.
+Use `agent` only when a prompt needs AI reasoning:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8066/api/tasks \
@@ -73,6 +74,7 @@ curl -sS -X POST http://127.0.0.1:8066/api/tasks \
     "type": "agent",
     "cron": "0 9 * * *",
     "enabled": true,
+    "timeout_seconds": 300,
     "target": {
       "receive_id_type": "open_id",
       "receive_id": "ou_xxx"
@@ -85,25 +87,23 @@ curl -sS -X POST http://127.0.0.1:8066/api/tasks \
   }'
 ```
 
-Required fields:
+`payload.tool` and `payload.model` are optional; omitting them uses the current AI configuration.
 
-- `id`: stable unique ID, lowercase letters/digits/dashes recommended.
-- `type`: `agent`.
-- `cron`: five-field cron expression.
-- `target.receive_id_type`: usually `open_id`.
-- `target.receive_id`: Feishu recipient ID.
-- `payload.prompt`: task prompt.
+## Creating a script task
 
-Optional fields:
+Create and validate the script first. It must live under `agent-workspace`, have a shebang, and be executable:
 
-- `name`: display name.
-- `enabled`: defaults to true.
-- `payload.tool`: `claude`, `qoder`, `copilot`, or `codebuddy`; omit to use current config.
-- `payload.model`: concrete model or configured alias.
+```bash
+mkdir -p scripts
+cat > scripts/disk-check.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+df -h "$@"
+SH
+chmod 700 scripts/disk-check.sh
+```
 
-## Creating a shell task
-
-Shell tasks run a local command and send stdout/stderr summary back to Feishu.
+Then register it as a `script` task. The scheduler invokes the script directly; it never passes the payload through a shell:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8066/api/tasks \
@@ -111,69 +111,45 @@ curl -sS -X POST http://127.0.0.1:8066/api/tasks \
   -d '{
     "id": "disk-check",
     "name": "磁盘检查",
-    "type": "shell",
+    "type": "script",
     "cron": "0 */6 * * *",
     "enabled": true,
+    "timeout_seconds": 120,
     "target": {
       "receive_id_type": "open_id",
       "receive_id": "ou_xxx"
     },
     "payload": {
-      "command": "df -h /home/shuaikai/projects/FeishuBot"
+      "script": "scripts/disk-check.sh",
+      "args": ["/home/shuaikai"]
     }
   }'
 ```
 
-Keep shell commands narrow and non-destructive. Do not use broad kill commands, global package installation, or commands that mutate unrelated directories.
+Do not use `payload.command`, pipes, redirects, `&&`, or a `shell` task type. Put any required fixed shell logic inside the reviewed script instead.
 
-## Listing and inspecting tasks
+## Listing, updating, running, and deleting
 
 ```bash
 curl -sS http://127.0.0.1:8066/api/tasks
 curl -sS http://127.0.0.1:8066/api/tasks/daily-summary
+curl -sS -X POST http://127.0.0.1:8066/api/tasks/daily-summary/run
+curl -sS -X DELETE http://127.0.0.1:8066/api/tasks/daily-summary
 ```
 
-In Feishu chat, `/timer` also lists tasks.
-
-## Updating a task
-
-Use `PUT` with the full updated fields you want to change:
+`PUT /api/tasks/<id>` accepts a partial update and preserves unspecified nested `target` and `payload` values:
 
 ```bash
 curl -sS -X PUT http://127.0.0.1:8066/api/tasks/daily-summary \
   -H 'Content-Type: application/json' \
   -d '{
     "cron": "30 9 * * 1-5",
-    "enabled": true,
     "payload": {
-      "prompt": "请总结工作日早晨需要关注的项目事项。",
-      "tool": "claude",
-      "model": "deepseek-v4-flash"
+      "prompt": "请总结工作日早晨需要关注的项目事项。"
     }
   }'
 ```
 
-## Manually running a task
+Legacy `shell` tasks are migrated once at scheduler startup into executable scripts under `agent-workspace/.scheduler-legacy/`. Review the generated script before relying on it.
 
-```bash
-curl -sS -X POST http://127.0.0.1:8066/api/tasks/daily-summary/run
-```
-
-Manual runs are useful for verifying a new task before waiting for its cron time.
-
-## Deleting a task
-
-```bash
-curl -sS -X DELETE http://127.0.0.1:8066/api/tasks/daily-summary
-```
-
-In Feishu chat, `/timer-rm daily-summary` also deletes a task.
-
-## Response expectations
-
-After any change, summarize:
-
-1. The task ID.
-2. The schedule in plain language.
-3. The target recipient.
-4. Whether a manual verification run was performed.
+After creating or changing a task, report its ID, schedule in plain language, type (`script` or `agent`), target recipient, and whether a manual run was performed.
