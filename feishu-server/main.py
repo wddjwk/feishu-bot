@@ -43,7 +43,7 @@ def setup_logging(config: Config) -> None:
     log_dir = config.resolve_path("logging.dir")
     log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     log_dir.chmod(0o700)
-    log_file = log_dir / "feishu-bot.log"
+    log_file = _current_log_path(config)
     level_name = str(config.get("logging.level", "INFO")).upper()
     level = getattr(logging, level_name, logging.INFO)
     file_max_bytes = int(config.get("logging.file_max_bytes", 10 * 1024 * 1024))
@@ -57,6 +57,10 @@ def setup_logging(config: Config) -> None:
     logging.getLogger(__name__).info("日志已初始化：文件=%s 单文件上限=%s 字节 保留备份=%s", log_file, file_max_bytes, backup_count)
 
 
+def _current_log_path(config: Config) -> Path:
+    return config.resolve_path("logging.dir") / f"feishu-bot-{os.getpid()}.log"
+
+
 def send_startup_notifications(config: Config, messenger: Messenger) -> None:
     pending_data: dict[str, str] = {}
     if PENDING_RESTART_PATH.exists():
@@ -68,16 +72,16 @@ def send_startup_notifications(config: Config, messenger: Messenger) -> None:
             pending_data = {}
         PENDING_RESTART_PATH.unlink(missing_ok=True)
 
-    receive_id = pending_data.get("receive_id")
-    receive_id_type = pending_data.get("receive_id_type") or "open_id"
-    if not receive_id:
+    receive_id = os.getenv("MAINTAINER_OPEN_ID", "").strip()
+    if not _looks_like_open_id(receive_id):
+        logging.getLogger(__name__).info("未发送启动通知：MAINTAINER_OPEN_ID 未配置或格式无效")
         return
 
     lines = [f"服务器已启动。", "", f"当前版本：`{config.version()}`"]
     if pending_data.get("reply_text"):
         lines.extend(["", pending_data["reply_text"]])
     card = cards.build_generic_card("FeishuBot 已启动", "\n".join(lines), "green")
-    threading.Timer(3.0, lambda: _safe_send_card(messenger, receive_id, receive_id_type, card)).start()
+    threading.Timer(3.0, lambda: _safe_send_card(messenger, receive_id, "open_id", card)).start()
 
 
 def _looks_like_open_id(value: str) -> bool:

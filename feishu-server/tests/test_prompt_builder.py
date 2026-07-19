@@ -87,6 +87,23 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("@/tmp/image.png", text)
         self.assertIn("@/tmp/video.mp4", text)
 
+    def test_text_only_prompt_does_not_create_workfolder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            messenger = FakeMessenger()
+            config = FakeConfig(root)
+            message = {
+                "message_id": "m-text",
+                "message_type": "text",
+                "content": json.dumps({"text": "无需附件"}),
+            }
+
+            result = build_prompt(message, messenger, config)
+
+            self.assertFalse((root / "workfolder" / "m-text").exists())
+
+        self.assertEqual(self._payload(result)["workfolder"], "workfolder/m-text")
+
     def test_markdown_only_image_key_is_downloaded_and_replaced(self):
         with tempfile.TemporaryDirectory() as tmp:
             messenger = FakeMessenger()

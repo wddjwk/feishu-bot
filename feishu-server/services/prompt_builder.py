@@ -230,7 +230,6 @@ def _work_dir(config: Config, root_message_id: str) -> Path:
     safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", root_message_id).strip("._")
     work_root = config.resolve_path("prompt.work_root")
     work_dir = work_root / (safe_id or "unknown")
-    work_dir.mkdir(parents=True, exist_ok=True)
     return work_dir.resolve()
 
 

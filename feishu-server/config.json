@@ -6,10 +6,10 @@
     "reaction_processing": "OnIt",
     "card_width": "half",
     "tool_icons": {
-      "qoder": "🖥️",
-      "claude": "🧠",
-      "copilot": "🤖",
-      "codebuddy": "🐇"
+      "qoder": "🦸‍♂️",
+      "claude": "🧞",
+      "copilot": "🧚",
+      "codebuddy": "🧑‍🎤"
     }
   },
   "ai": {

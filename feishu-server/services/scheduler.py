@@ -139,7 +139,6 @@ class Scheduler:
         self._server: ThreadingHTTPServer | None = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self.script_root.mkdir(parents=True, exist_ok=True)
         self._load()
 
     def start(self) -> None:

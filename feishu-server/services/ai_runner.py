@@ -241,9 +241,9 @@ class AIRunner:
 
         workspace = self.config.resolve_path("ai.workspace").resolve()
         workspace.mkdir(parents=True, exist_ok=True)
-        logger.info("AI 执行命令（完整）：%s", shlex.join(command))
+        logger.info("AI 执行命令：%s", shlex.join(command))
         if spec.prompt_transport == "stdin":
-            logger.info("AI 标准输入 prompt（完整）：\n%s", prompt_text or "（空）")
+            logger.info("AI 标准输入 prompt：\n%s", prompt_text or "（空）")
         started_at = time.monotonic()
         try:
             process = subprocess.Popen(

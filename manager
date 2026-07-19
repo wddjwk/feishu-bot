@@ -42,9 +42,9 @@ start() {
   fi
   ensure_venv
   install_hooks
-  mkdir -p "$SERVER_DIR/data" "$SERVER_DIR/logs" "$ROOT/agent-workspace/download"
+  mkdir -p "$SERVER_DIR/data" "$SERVER_DIR/logs"
   cd "$SERVER_DIR"
-  setsid "$PY" main.py >> "$SERVER_DIR/logs/manager.out" 2>&1 &
+  setsid "$PY" main.py >/dev/null 2>&1 &
   echo "$!" > "$PID_FILE"
   echo "FeishuBot started: $(cat "$PID_FILE")"
 }
@@ -82,12 +82,18 @@ status() {
 }
 
 show_log() {
-  mkdir -p "$SERVER_DIR/logs"
-  local latest
-  latest="$(find "$SERVER_DIR/logs" -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
-  [[ -n "$latest" ]] || latest="$SERVER_DIR/logs/manager.out"
-  touch "$latest"
-  tail -n 200 -f "$latest"
+  if ! is_running; then
+    echo "FeishuBot is not running" >&2
+    return 1
+  fi
+  local pid log_file
+  pid="$(cat "$PID_FILE")"
+  log_file="$SERVER_DIR/logs/feishu-bot-${pid}.log"
+  if [[ ! -f "$log_file" ]]; then
+    echo "Current service log is not ready: $log_file" >&2
+    return 1
+  fi
+  exec tail -n 200 -F "$log_file"
 }
 
 deferred_restart() {

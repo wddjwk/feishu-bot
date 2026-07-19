@@ -41,13 +41,12 @@ description: 修改、升级、修复、重启或部署 FeishuBot 自身时使�
    Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
    ```
 
-5. 若已知当前飞书用户 open_id，写入 `../pending_restart.json`：
+5. 服务会使用 `.env` 的 `MAINTAINER_OPEN_ID` 发送每次启动通知。自更新时如需追加更新说明，写入 `../pending_restart.json`：
 
    ```json
-   {"receive_id_type":"open_id","receive_id":"ou_xxx","reply_text":"FeishuBot 已更新并完成延迟重启。"}
+   {"reply_text":"FeishuBot 已更新并完成延迟重启。"}
    ```
 
-   未知用户时不要猜测或写维护者兜底。
 6. 执行 `../manager deferred-restart 5`。只有验证通过才重启。
 
 ## 禁止事项
