@@ -9,6 +9,7 @@ from uuid import UUID
 
 from handlers.message_handler import MessageHandler
 from services.ai_runner import AIResult
+from utils.lark_cli_wrapper import LarkCliError
 
 
 class FakeConfig:
@@ -38,6 +39,7 @@ class FakeMessenger:
         self.replies: list[dict] = []
         self.reactions: list[dict] = []
         self.deleted_reactions: list[dict] = []
+        self.files: list[dict] = []
         self.bot_info_calls = 0
         self.bot_open_id = "ou_bot"
 
@@ -70,6 +72,14 @@ class FakeMessenger:
 
     def download_message_resource(self, _message_id, _file_key, _resource_type, dest: Path):
         return dest
+
+    def reply_file(self, message_id: str, path: Path, *, reply_in_thread: bool):
+        self.files.append({"kind": "file", "message_id": message_id, "path": path, "reply_in_thread": reply_in_thread})
+        return {"message_id": f"file-{message_id}", "thread_id": "thread-1" if reply_in_thread else ""}
+
+    def reply_image(self, message_id: str, path: Path, *, reply_in_thread: bool):
+        self.files.append({"kind": "image", "message_id": message_id, "path": path, "reply_in_thread": reply_in_thread})
+        return {"message_id": f"image-{message_id}", "thread_id": "thread-1" if reply_in_thread else ""}
 
 
 class FakeRunner:
@@ -200,7 +210,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
         self.assertEqual({item["link_type"] for item in store.saved}, {"user_message", "bot_reply", "thread"})
         self.assertEqual(messenger.deleted_reactions, [{"message_id": "m2", "reaction_id": "reaction-1"}])
 
-    def test_file_only_message_starts_an_agent(self):
+    def test_standalone_file_message_is_ignored(self):
         messenger = FakeMessenger()
         runner = FakeRunner()
         handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
@@ -213,11 +223,146 @@ class MessageHandlerFlowTests(unittest.TestCase):
             }
         )
 
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(messenger.replies, [])
+        self.assertEqual(messenger.reactions, [])
+
+    def test_reply_to_file_downloads_it_and_starts_an_agent(self):
+        messenger = FakeMessenger()
+        messenger.get_message = lambda message_id: {
+            "message_id": message_id,
+            "message_type": "file",
+            "content": json.dumps({"file_key": "file-key", "file_name": "notes.txt"}),
+            "create_time": "1",
+        }
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-reply-file",
+                "message_type": "text",
+                "parent_id": "m-file",
+                "content": json.dumps({"text": "请分析这个文件"}),
+                "create_time": "2",
+            }
+        )
+
         with patch("handlers.message_handler.threading.Thread", ImmediateThread):
             handler.handle_event(event)
 
         self.assertEqual(len(runner.calls), 1)
-        self.assertEqual(runner.calls[0]["prompt"]["context"]["attached_files"][0]["name"], "notes.txt")
+        attached = runner.calls[0]["prompt"]["context"]["attached_files"]
+        self.assertEqual(attached[0]["key"], "file-key")
+        self.assertIn("@", "\n".join(runner.calls[0]["prompt"]["context"]["conversation_history"]))
+
+    def test_group_reply_to_file_requires_and_honors_bot_mention(self):
+        messenger = FakeMessenger()
+        messenger.get_message = lambda message_id: {
+            "message_id": message_id,
+            "message_type": "file",
+            "content": json.dumps({"file_key": "file-key", "file_name": "notes.txt"}),
+            "create_time": "1",
+        }
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None, bot_open_id="ou_bot")
+        event = message_event(
+            {
+                "message_id": "m-group-reply-file",
+                "message_type": "text",
+                "chat_type": "group",
+                "parent_id": "m-file",
+                "mentions": [{"id": {"open_id": "ou_bot"}, "mentioned_type": "bot"}],
+                "content": json.dumps({"text": "@_user_1 请分析"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(runner.calls[0]["prompt"]["context"]["attached_files"][0]["key"], "file-key")
+
+    def test_generated_file_is_sent_before_completion_card(self):
+        class FileRunner(FakeRunner):
+            def __init__(self, path: Path) -> None:
+                super().__init__()
+                self.path = path
+
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+                self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
+                return AIResult(
+                    True,
+                    tool or "claude",
+                    model or "deepseek-v4-flash",
+                    result=f"文件已完成。\n[[FEISHU_FILE:{self.path}]]",
+                    session_id=session_id or resume_session_id,
+                )
+
+        messenger = FakeMessenger()
+        config = FakeConfig()
+        output = config.download_dir / "report.txt"
+        output.write_text("done", encoding="utf-8")
+        runner = FileRunner(output)
+        store = FakeSessionStore()
+        handler = MessageHandler(config, messenger, runner, store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-delivery",
+                "message_type": "text",
+                "content": json.dumps({"text": "生成报告"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(messenger.files[0]["kind"], "file")
+        self.assertEqual(messenger.files[0]["message_id"], "m-delivery")
+        self.assertEqual(messenger.replies[0]["message_id"], "file-m-delivery")
+        self.assertIn("文件已完成", messenger.replies[0]["card"]["body"]["elements"][0]["content"])
+        self.assertIn("bot_file", {item["link_type"] for item in store.saved})
+
+    def test_generated_image_falls_back_to_file_when_image_send_fails(self):
+        class ImageFailingMessenger(FakeMessenger):
+            def reply_image(self, *_args, **_kwargs):
+                raise LarkCliError("image upload rejected")
+
+        class ImageRunner(FakeRunner):
+            def __init__(self, path: Path) -> None:
+                super().__init__()
+                self.path = path
+
+            def run(self, _prompt, _message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+                return AIResult(
+                    True,
+                    tool or "claude",
+                    model or "deepseek-v4-flash",
+                    result=f"图片已完成。\n[[FEISHU_FILE:{self.path}]]",
+                    session_id=session_id or resume_session_id,
+                )
+
+        config = FakeConfig()
+        image = config.download_dir / "report.png"
+        image.write_bytes(b"image")
+        messenger = ImageFailingMessenger()
+        handler = MessageHandler(config, messenger, ImageRunner(image), FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-image-delivery",
+                "message_type": "text",
+                "content": json.dumps({"text": "生成图片"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(messenger.files[0]["kind"], "file")
 
     def test_failed_new_run_does_not_create_resumable_mapping(self):
         class FailingRunner(FakeRunner):

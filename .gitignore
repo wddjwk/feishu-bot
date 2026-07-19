@@ -6,6 +6,7 @@ feishu-server/data/
 feishu-server/logs/
 agent-workspace/download/
 agent-workspace/.scheduler-legacy/
+agent-workspace/memory/
 __pycache__/
 *.py[cod]
 *.log

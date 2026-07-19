@@ -86,6 +86,11 @@
     "thread_message_limit": 50,
     "download_dir": "../agent-workspace/download"
   },
+  "lark_cli": {
+    "command": "lark-cli",
+    "profile": "feishu-bot-server",
+    "timeout_seconds": 120
+  },
   "session_store": {
     "path": "data/session_map.json",
     "retention_days": 90,

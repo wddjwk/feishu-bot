@@ -4,6 +4,7 @@ import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -13,8 +14,10 @@ from config import Config, ConfigError
 from handlers import BaseHandler
 from services.ai_runner import AIRunner
 from services.messenger import FeishuApiError, Messenger
-from services.prompt_builder import build_prompt, extract_text, normalize_event
+from services.prompt_builder import build_prompt, extract_text, is_standalone_file_message, normalize_event
 from services.session_store import SessionStore
+from utils.file_delivery import extract_file_deliveries, is_image_file
+from utils.lark_cli_wrapper import LarkCliError
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +65,9 @@ class MessageHandler(BaseHandler):
             return
         if not self._should_handle(message):
             logger.info("忽略未 @ 当前机器人的群消息：消息=%s", message_id)
+            return
+        if is_standalone_file_message(message):
+            logger.info("收到独立文件消息，等待用户回复文件后再处理：消息=%s", message_id)
             return
 
         text = extract_text(message).strip()
@@ -152,7 +158,14 @@ class MessageHandler(BaseHandler):
                 resume_session_id=conversation.session_id if conversation.resume else None,
             )
             if result.ok:
-                card = cards.build_ai_card(result.tool, result.model, result.result, result.thinking)
+                delivery = extract_file_deliveries(result.result, self.config.resolve_path("ai.workspace"))
+                if delivery.paths:
+                    self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
+                    return
+                result_text = delivery.text
+                if delivery.errors:
+                    result_text = "\n".join([result_text, *[f"文件交付失败：{error}" for error in delivery.errors]]).strip()
+                card = cards.build_ai_card(result.tool, result.model, result_text or "任务已完成。", result.thinking)
             else:
                 card = cards.build_error_card("AI 分析失败", result.error or "未能获取有效输出", result.stderr)
             try:
@@ -172,6 +185,8 @@ class MessageHandler(BaseHandler):
         reply: dict[str, Any],
         conversation: Conversation,
         session_id: str,
+        *,
+        related_bot_message_ids: list[str] | None = None,
     ) -> None:
         metadata = {
             "source_message_id": user_message.get("message_id"),
@@ -200,6 +215,16 @@ class MessageHandler(BaseHandler):
                 link_type="bot_reply",
                 metadata=metadata,
             )
+        for related_message_id in related_bot_message_ids or []:
+            if related_message_id:
+                self.session_store.set(
+                    related_message_id,
+                    session_id,
+                    tool=conversation.tool,
+                    model=conversation.model,
+                    link_type="bot_file",
+                    metadata=metadata,
+                )
         if not user_message.get("thread_id"):
             return
         seen_keys: set[str] = set()
@@ -216,6 +241,50 @@ class MessageHandler(BaseHandler):
                     link_type="thread",
                     metadata=metadata,
                 )
+
+    def _reply_deliveries(
+        self,
+        message: dict[str, Any],
+        paths: list[Path],
+        completion_text: str,
+        result: Any,
+        conversation: Conversation,
+    ) -> None:
+        message_id = message["message_id"]
+        reply_in_thread = self._reply_in_thread(message)
+        delivered_message_ids: list[str] = []
+        try:
+            for path in paths:
+                if is_image_file(path):
+                    try:
+                        delivered = self.messenger.reply_image(message_id, path, reply_in_thread=reply_in_thread)
+                    except LarkCliError as exc:
+                        logger.warning("图片发送失败，回退为文件发送：消息=%s 路径=%s 错误=%s", message_id, path, exc)
+                        delivered = self.messenger.reply_file(message_id, path, reply_in_thread=reply_in_thread)
+                else:
+                    delivered = self.messenger.reply_file(message_id, path, reply_in_thread=reply_in_thread)
+                delivered_message_id = delivered.get("message_id")
+                if not isinstance(delivered_message_id, str) or not delivered_message_id:
+                    raise LarkCliError(f"发送文件后未返回消息 ID：{path}")
+                delivered_message_ids.append(delivered_message_id)
+                logger.info("已发送 AI 交付文件：请求消息=%s 文件消息=%s 路径=%s", message_id, delivered_message_id, path)
+
+            status = completion_text or "文件已生成并发送。"
+            card = cards.build_ai_card(result.tool, result.model, status, result.thinking)
+            reply = self.messenger.reply_card(delivered_message_ids[-1], card, reply_in_thread=reply_in_thread)
+        except (FeishuApiError, LarkCliError) as exc:
+            logger.exception("发送 AI 交付文件失败：消息=%s 错误=%s", message_id, exc)
+            self._reply_card(message, cards.build_error_card("文件发送失败", str(exc)))
+            return
+        if result.session_id:
+            self._save_session_mappings(
+                message,
+                reply,
+                conversation,
+                result.session_id,
+                related_bot_message_ids=delivered_message_ids,
+            )
+        logger.info("文件交付完成说明已发送：文件消息=%s 说明消息=%s", delivered_message_ids[-1], reply.get("message_id"))
 
     def _conversation_for(self, message: dict[str, Any]) -> Conversation | None:
         if message.get("thread_id"):

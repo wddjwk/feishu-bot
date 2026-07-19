@@ -13,6 +13,7 @@ from urllib.parse import urlencode, quote
 from urllib.request import Request, urlopen
 
 from config import Config
+from utils.lark_cli_wrapper import LarkCliError, LarkCliWrapper
 
 
 logger = logging.getLogger(__name__)
@@ -51,10 +52,17 @@ class TenantTokenProvider:
 
 
 class Messenger:
-    def __init__(self, config: Config, token_provider: TenantTokenProvider) -> None:
+    def __init__(
+        self,
+        config: Config,
+        token_provider: TenantTokenProvider,
+        *,
+        lark_cli: LarkCliWrapper | None = None,
+    ) -> None:
         self.config = config
         self.token_provider = token_provider
         self.base_url = str(config.get("feishu.base_url")).rstrip("/")
+        self.lark_cli = lark_cli or LarkCliWrapper.from_config(config)
         self._bot_open_id = ""
         self._bot_open_id_lock = threading.Lock()
 
@@ -174,6 +182,31 @@ class Messenger:
         self._request_json("DELETE", f"/im/v1/messages/{quote(message_id)}/reactions/{quote(reaction_id)}")
 
     def download_message_resource(self, message_id: str, file_key: str, resource_type: str, dest: Path) -> Path:
+        try:
+            return self.lark_cli.download_message_resource(message_id, file_key, resource_type, dest)
+        except LarkCliError as exc:
+            logger.warning(
+                "lark-cli 下载消息资源失败，回退飞书 API：消息=%s 资源=%s 类型=%s 错误=%s",
+                message_id,
+                file_key,
+                resource_type,
+                exc,
+            )
+        return self._download_message_resource_via_api(message_id, file_key, resource_type, dest)
+
+    def reply_file(self, message_id: str, path: Path, *, reply_in_thread: bool) -> dict[str, Any]:
+        return self.lark_cli.reply_file(message_id, path, reply_in_thread=reply_in_thread)
+
+    def reply_image(self, message_id: str, path: Path, *, reply_in_thread: bool) -> dict[str, Any]:
+        return self.lark_cli.reply_image(message_id, path, reply_in_thread=reply_in_thread)
+
+    def send_file(self, chat_id: str, path: Path) -> dict[str, Any]:
+        return self.lark_cli.send_file(chat_id, path)
+
+    def send_image(self, chat_id: str, path: Path) -> dict[str, Any]:
+        return self.lark_cli.send_image(chat_id, path)
+
+    def _download_message_resource_via_api(self, message_id: str, file_key: str, resource_type: str, dest: Path) -> Path:
         query = urlencode({"type": resource_type})
         url = f"{self.base_url}/im/v1/messages/{quote(message_id)}/resources/{quote(file_key)}?{query}"
         request = Request(url, method="GET", headers={"Authorization": f"Bearer {self.token_provider.token()}"})

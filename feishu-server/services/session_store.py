@@ -17,6 +17,7 @@ LINK_RETENTION_PRIORITY = {
     "user_message": 0,
     "legacy": 0,
     "bot_reply": 1,
+    "bot_file": 1,
     "thread": 2,
 }
 
