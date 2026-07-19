@@ -53,8 +53,7 @@
   },
   "prompt": {
     "group_thread_context_limit": 100,
-    "download_retention_days": 7,
-    "download_dir": "../agent-workspace/download"
+    "work_root": "../agent-workspace/workfolder"
   },
   "lark_cli": {
     "command": "lark-cli",

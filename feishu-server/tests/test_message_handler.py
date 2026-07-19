@@ -14,7 +14,8 @@ from utils.lark_cli_wrapper import LarkCliError
 
 class FakeConfig:
     def __init__(self) -> None:
-        self.download_dir = Path(tempfile.mkdtemp())
+        self.workspace = Path(tempfile.mkdtemp())
+        self.download_dir = self.workspace / "workfolder"
 
     def get(self, dotted: str, default=None):
         values = {
@@ -24,6 +25,10 @@ class FakeConfig:
         return values.get(dotted, default)
 
     def resolve_path(self, dotted: str) -> Path:
+        if dotted == "ai.workspace":
+            return self.workspace
+        if dotted == "prompt.work_root":
+            return self.download_dir
         return self.download_dir
 
     def current_tool(self) -> str:
@@ -285,25 +290,26 @@ class MessageHandlerFlowTests(unittest.TestCase):
 
     def test_generated_file_is_sent_before_completion_card(self):
         class FileRunner(FakeRunner):
-            def __init__(self, path: Path) -> None:
+            def __init__(self, workspace: Path) -> None:
                 super().__init__()
-                self.path = path
+                self.workspace = workspace
 
             def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
                 self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
+                path = self.workspace / json.loads(prompt)["workfolder"] / "report.txt"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("done", encoding="utf-8")
                 return AIResult(
                     True,
                     tool or "claude",
                     model or "deepseek-v4-flash",
-                    result=f"文件已完成。\n[[FEISHU_FILE:{self.path}]]",
+                    result=f"文件已完成。\n[[FEISHU_FILE:{path}]]",
                     session_id=session_id or resume_session_id,
                 )
 
         messenger = FakeMessenger()
         config = FakeConfig()
-        output = config.download_dir / "report.txt"
-        output.write_text("done", encoding="utf-8")
-        runner = FileRunner(output)
+        runner = FileRunner(config.workspace)
         store = FakeSessionStore()
         handler = MessageHandler(config, messenger, runner, store, scheduler=None)
         event = message_event(
@@ -330,24 +336,25 @@ class MessageHandlerFlowTests(unittest.TestCase):
                 raise LarkCliError("image upload rejected")
 
         class ImageRunner(FakeRunner):
-            def __init__(self, path: Path) -> None:
+            def __init__(self, workspace: Path) -> None:
                 super().__init__()
-                self.path = path
+                self.workspace = workspace
 
-            def run(self, _prompt, _message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+            def run(self, prompt, _message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+                path = self.workspace / json.loads(prompt)["workfolder"] / "report.png"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"image")
                 return AIResult(
                     True,
                     tool or "claude",
                     model or "deepseek-v4-flash",
-                    result=f"图片已完成。\n[[FEISHU_FILE:{self.path}]]",
+                    result=f"图片已完成。\n[[FEISHU_FILE:{path}]]",
                     session_id=session_id or resume_session_id,
                 )
 
         config = FakeConfig()
-        image = config.download_dir / "report.png"
-        image.write_bytes(b"image")
         messenger = ImageFailingMessenger()
-        handler = MessageHandler(config, messenger, ImageRunner(image), FakeSessionStore(), scheduler=None)
+        handler = MessageHandler(config, messenger, ImageRunner(config.workspace), FakeSessionStore(), scheduler=None)
         event = message_event(
             {
                 "message_id": "m-image-delivery",

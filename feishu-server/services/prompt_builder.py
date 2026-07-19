@@ -3,14 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-import shutil
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from config import Config
 from services.messenger import FeishuApiError, Messenger
@@ -25,6 +22,7 @@ FILE_KEY_PATTERN = re.compile(r"\bfile_[A-Za-z0-9_-]+\b")
 @dataclass
 class PromptBuildResult:
     prompt: str
+    work_dir: Path
     attached_files: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -74,9 +72,11 @@ def build_prompt(
     config: Config,
 ) -> PromptBuildResult:
     reply_chain = _trace_reply_chain(message, messenger) if message.get("parent_id") else [message]
+    root_message_id = _root_message_id(message, reply_chain)
+    work_dir = _work_dir(config, root_message_id)
     group_thread = _group_thread_context(message, messenger, config) if message.get("thread_id") and message.get("chat_type") == "group" else []
     attachment_messages = _merge_messages(reply_chain, group_thread)
-    attachments, references = _download_attachments(attachment_messages, messenger, config)
+    attachments, references = _download_attachments(attachment_messages, messenger, work_dir)
 
     user_input = extract_text(message, resource_references=references).strip()
     user_input = _append_attachment_references(
@@ -97,13 +97,17 @@ def build_prompt(
     else:
         context_messages = []
 
-    parts = [
-        f"用户 ID：{message.get('sender_id') or 'unknown'}",
-        f"用户输入：\n{user_input or '（无文本内容）'}",
-    ]
-    if context_messages:
-        parts.append("上下文：\n" + "\n".join(_history_line(item, references) for item in context_messages))
-    return PromptBuildResult("\n\n".join(parts), attached_files=attachments)
+    prompt = {
+        "workfolder": _relative_workfolder(work_dir),
+        "user_id": str(message.get("sender_id") or "unknown"),
+        "user_input": user_input or "（无文本内容）",
+        "context": [_history_line(item, references) for item in context_messages],
+    }
+    return PromptBuildResult(
+        json.dumps(prompt, ensure_ascii=False, indent=2),
+        work_dir=work_dir,
+        attached_files=attachments,
+    )
 
 
 def extract_text(
@@ -211,6 +215,29 @@ def _merge_messages(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(merged.values(), key=lambda item: int(item.get("create_time") or 0))
 
 
+def _root_message_id(message: dict[str, Any], reply_chain: list[dict[str, Any]]) -> str:
+    root_id = message.get("root_id")
+    if isinstance(root_id, str) and root_id:
+        return root_id
+    for item in reversed(reply_chain):
+        message_id = item.get("message_id")
+        if isinstance(message_id, str) and message_id:
+            return message_id
+    return str(message.get("message_id") or "unknown")
+
+
+def _work_dir(config: Config, root_message_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", root_message_id).strip("._")
+    work_root = config.resolve_path("prompt.work_root")
+    work_dir = work_root / (safe_id or "unknown")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir.resolve()
+
+
+def _relative_workfolder(work_dir: Path) -> str:
+    return (Path("workfolder") / work_dir.name).as_posix()
+
+
 def _without_message(messages: list[dict[str, Any]], message_id: Any) -> list[dict[str, Any]]:
     return [item for item in messages if item.get("message_id") != message_id]
 
@@ -239,28 +266,13 @@ def _cached_resource_path(destination: Path) -> Path | None:
     return candidates[0] if candidates and candidates[0].is_file() else None
 
 
-def _cleanup_download_cache(download_dir: Path, retention_days: int) -> None:
-    if retention_days <= 0 or not download_dir.exists():
-        return
-    cutoff = time.time() - retention_days * 24 * 60 * 60
-    for path in download_dir.iterdir():
-        if not path.is_dir() or path.stat().st_mtime >= cutoff:
-            continue
-        try:
-            shutil.rmtree(path)
-        except OSError as exc:
-            logger.warning("清理过期附件缓存失败：路径=%s 错误=%s", path, exc)
-
-
 def _download_attachments(
     messages: list[dict[str, Any]],
     messenger: Messenger,
-    config: Config,
+    work_dir: Path,
 ) -> tuple[list[dict[str, str]], dict[str, dict[str, str]]]:
     attached: list[dict[str, str]] = []
     references: dict[str, dict[str, str]] = {}
-    download_dir = config.resolve_path("prompt.download_dir")
-    _cleanup_download_cache(download_dir, int(config.get("prompt.download_retention_days", 7)))
     for message in messages:
         message_id = str(message.get("message_id") or "")
         if not message_id:
@@ -272,7 +284,7 @@ def _download_attachments(
                 continue
             safe_name = _safe_filename(file_item.get("name") or key)
             cache_key = sha256(f"{message_id}:{key}:{file_item['type']}".encode("utf-8")).hexdigest()[:24]
-            destination = download_dir / cache_key / f"resource_{index:02d}_{safe_name}"
+            destination = work_dir / "attachments" / cache_key / f"resource_{index:02d}_{safe_name}"
             try:
                 path = _cached_resource_path(destination) or messenger.download_message_resource(
                     message_id,

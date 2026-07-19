@@ -1,9 +1,7 @@
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from services.messenger import FeishuApiError
 from services.prompt_builder import (
@@ -26,9 +24,9 @@ class FakeConfig:
         return values.get(dotted, default)
 
     def resolve_path(self, dotted: str):
-        if dotted != "prompt.download_dir":
+        if dotted != "prompt.work_root":
             raise AssertionError(dotted)
-        return self.root / "download"
+        return self.root / "workfolder"
 
 
 class FakeMessenger:
@@ -52,6 +50,10 @@ class FakeMessenger:
 
 
 class PromptBuilderTests(unittest.TestCase):
+    @staticmethod
+    def _payload(result):
+        return json.loads(result.prompt)
+
     def test_post_preserves_links_code_markdown_and_media_references(self):
         message = {
             "message_id": "m-post",
@@ -106,7 +108,7 @@ class PromptBuilderTests(unittest.TestCase):
             result = build_prompt(message, messenger, config)
 
         self.assertEqual(result.attached_files[0]["key"], "img_v3_markdown_only")
-        self.assertIn("@", result.prompt)
+        self.assertIn("@", self._payload(result)["user_input"])
 
     def test_failed_attachment_download_hides_resource_key_from_prompt(self):
         class FailingMessenger(FakeMessenger):
@@ -149,10 +151,10 @@ class PromptBuilderTests(unittest.TestCase):
             result = build_prompt(message, messenger, config)
 
         self.assertEqual({item["key"] for item in result.attached_files}, {"img-key", "file-key", "cover-key"})
-        self.assertIn("@", result.prompt)
-        self.assertIn("用户输入：", result.prompt)
-        self.assertNotIn("message_id", result.prompt)
-        self.assertNotIn("source_messages", result.prompt)
+        payload = self._payload(result)
+        self.assertIn("@", payload["user_input"])
+        self.assertEqual(set(payload), {"workfolder", "user_id", "user_input", "context"})
+        self.assertEqual(payload["workfolder"], "workfolder/m-rich")
 
     def test_reply_to_file_downloads_parent_file_but_standalone_file_is_identified(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,8 +178,10 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertTrue(is_standalone_file_message(standalone))
         self.assertFalse(is_standalone_file_message(reply))
         self.assertEqual(result.attached_files[0]["name"], "resource_01_report.pdf")
-        self.assertIn("@", result.prompt)
-        self.assertIn("上下文：", result.prompt)
+        payload = self._payload(result)
+        self.assertIn("@", payload["user_input"])
+        self.assertTrue(payload["context"])
+        self.assertEqual(payload["workfolder"], "workfolder/m-file")
 
     def test_extract_files_handles_direct_audio_and_video(self):
         audio = normalize_message(
@@ -236,10 +240,10 @@ class PromptBuilderTests(unittest.TestCase):
             result = build_prompt(message, messenger, config)
 
         self.assertEqual(result.attached_files[-1]["key"], "current-image")
-        self.assertIn("@", result.prompt)
-        self.assertIn("[", result.prompt)
-        self.assertIn("[ou_old_1]: old 1", result.prompt)
-        self.assertNotIn("current-image", result.prompt.split("上下文：", maxsplit=1)[1])
+        payload = self._payload(result)
+        self.assertIn("@", payload["user_input"])
+        self.assertTrue(any("[ou_old_1]: old 1" in line for line in payload["context"]))
+        self.assertNotIn("current-image", "\n".join(payload["context"]))
         self.assertEqual(messenger.list_kwargs["sort_type"], "ByCreateTimeDesc")
 
     def test_private_topic_keeps_replied_file_reference_without_repeating_history(self):
@@ -265,9 +269,11 @@ class PromptBuilderTests(unittest.TestCase):
 
             result = build_prompt(message, messenger, config)
 
-        self.assertIn("用户 ID：ou_user", result.prompt)
-        self.assertIn("@", result.prompt)
-        self.assertNotIn("上下文：", result.prompt)
+        payload = self._payload(result)
+        self.assertEqual(payload["user_id"], "ou_user")
+        self.assertIn("@", payload["user_input"])
+        self.assertEqual(payload["context"], [])
+        self.assertEqual(payload["workfolder"], "workfolder/file-parent")
 
     def test_prompt_never_contains_server_message_ids_or_raw_unknown_nodes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,9 +297,10 @@ class PromptBuilderTests(unittest.TestCase):
 
             result = build_prompt(message, messenger, config)
 
-        self.assertIn("@张三", result.prompt)
-        self.assertIn("[飞书组件：unsupported]", result.prompt)
-        self.assertNotIn("om_server_id", result.prompt)
+        payload = self._payload(result)
+        self.assertIn("@张三", payload["user_input"])
+        self.assertIn("[飞书组件：unsupported]", payload["user_input"])
+        self.assertEqual(payload["workfolder"], "workfolder/om_server_id")
         self.assertNotIn("om_hidden", result.prompt)
         self.assertNotIn("ou_hidden", result.prompt)
 
@@ -308,17 +315,12 @@ class PromptBuilderTests(unittest.TestCase):
             }
 
             first = build_prompt(message, messenger, config)
-            cache_dir = messenger.downloaded[0]["path"].parent
-            os.utime(cache_dir, (0, 0))
-            with patch("services.prompt_builder._cleanup_download_cache"):
-                second = build_prompt(message, messenger, config)
-            cache_was_refreshed = cache_dir.stat().st_mtime > 0
+            second = build_prompt(message, messenger, config)
 
         self.assertEqual(len(messenger.downloaded), 1)
-        self.assertIn("@", first.prompt)
+        self.assertIn("@", self._payload(first)["user_input"])
         self.assertEqual(first.prompt, second.prompt)
-        self.assertNotIn("om_server_id", first.prompt)
-        self.assertTrue(cache_was_refreshed)
+        self.assertEqual(self._payload(first)["workfolder"], "workfolder/om_server_id")
 
 
 if __name__ == "__main__":

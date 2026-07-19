@@ -31,7 +31,7 @@ Self-updates must use `./manager deferred-restart 5`, not direct restart, so the
 
 Set `feishu.card_width` to `half` for Feishu's default 600px card width or `full` to use `width_mode: fill`. `/reload` applies width changes without a restart.
 
-Message resources are downloaded through `lark-cli` under a dedicated bot profile initialized from `.env` when needed, with the native Feishu API as a fallback. Prompts contain only sender ID, user input, inline `@absolute/path` attachments, and needed reply/group-topic context; standalone file messages are intentionally ignored until a user replies to the file.
+Message resources are downloaded through `lark-cli` under a dedicated bot profile initialized from `.env` when needed, with the native Feishu API as a fallback. Each Agent runs from `agent-workspace`; prompts carry a `workfolder/<root-message-id>` soft constraint, sender ID, user input, inline `@absolute/path` attachments, and needed reply/group-topic context. Standalone file messages are intentionally ignored until a user replies to the file.
 
 Scheduler usage is documented for agents in `agent-workspace/.claude/skills/feishu-scheduler/SKILL.md`. Safe self-update and deferred restart usage is documented in `agent-workspace/.claude/skills/feishu-self-update/SKILL.md`. The singular `agent-workspace/.claude/skill` path is kept as a compatibility symlink.
 

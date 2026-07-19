@@ -239,11 +239,11 @@ class AIRunner:
                 return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
             command.append(prompt_text)
 
-        workspace = self.config.resolve_path("ai.workspace")
+        workspace = self.config.resolve_path("ai.workspace").resolve()
         workspace.mkdir(parents=True, exist_ok=True)
-        command_for_log = command[:-1] if spec.prompt_transport == "argument" else command
-        logger.info("AI 命令：CLI=%s 模型=%s 会话=%s 命令=%s", selected_tool, selected_model, resume_session_id or session_id or "（新会话）", shlex.join(command_for_log))
-        logger.info("AI 完整提示词：\n%s", prompt_text or "（空）")
+        logger.info("AI 执行命令（完整）：%s", shlex.join(command))
+        if spec.prompt_transport == "stdin":
+            logger.info("AI 标准输入 prompt（完整）：\n%s", prompt_text or "（空）")
         started_at = time.monotonic()
         try:
             process = subprocess.Popen(
@@ -254,7 +254,10 @@ class AIRunner:
                 stderr=subprocess.PIPE,
                 text=True,
                 preexec_fn=os.setsid,
-                env={**os.environ, **dict(spec.env)},
+                env={
+                    **os.environ,
+                    **dict(spec.env),
+                },
             )
         except FileNotFoundError:
             error = f"找不到 AI 命令：{command[0]}"
@@ -271,7 +274,8 @@ class AIRunner:
         except subprocess.TimeoutExpired:
             self._kill_process_group(process, signal.SIGKILL)
             stdout, stderr = process.communicate()
-            self._log_process_output(stdout, stderr)
+            partial = parse_output(spec.output_parser, stdout, stderr)
+            self._log_ai_output(partial.result, stderr, completed=False)
             elapsed = time.monotonic() - started_at
             logger.error("AI 进程超时：消息=%s 耗时=%.2fs 超时=%ss", message_id, elapsed, timeout)
             return AIResult(
@@ -288,7 +292,6 @@ class AIRunner:
         finally:
             self.registry.unregister(message_id)
 
-        self._log_process_output(stdout, stderr)
         parsed = parse_output(spec.output_parser, stdout, stderr)
         parsed.tool = selected_tool
         parsed.model = selected_model
@@ -299,6 +302,7 @@ class AIRunner:
         if process.returncode != 0 and not parsed.result:
             parsed.ok = False
             parsed.error = stderr.strip() or f"AI 进程退出码异常：{process.returncode}"
+        self._log_ai_output(parsed.result, stderr, completed=True)
         return parsed
 
     def _build_command(
@@ -311,8 +315,13 @@ class AIRunner:
         return ToolSpec.from_config(tool, self.config).build_command(model, session_id, resume_session_id)
 
     @staticmethod
-    def _log_process_output(stdout: str, stderr: str) -> None:
-        logger.info("AI 原始输出（完整）：\n[stdout]\n%s\n[stderr]\n%s", stdout or "（空）", stderr or "（空）")
+    def _log_ai_output(result: str, stderr: str, *, completed: bool) -> None:
+        if result.strip():
+            logger.info("AI 回复：\n%s", result.strip())
+        else:
+            logger.info("AI 已%s（未解析到可展示回复）", "完成" if completed else "停止")
+        if stderr.strip():
+            logger.warning("AI 错误输出：\n%s", stderr.strip())
 
     @staticmethod
     def _kill_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:

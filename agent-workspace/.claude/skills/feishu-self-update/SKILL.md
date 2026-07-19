@@ -1,128 +1,58 @@
 ---
 name: feishu-self-update
-description: Use this skill whenever the user asks the FeishuBot agent to modify, upgrade, fix, restart, redeploy, or update the bot itself. It gives the exact safe workflow for editing server code, validating changes, committing with the required version format, writing pending_restart.json, and using deferred restart so the Feishu reply is delivered before the process exits.
+description: 修改、升级、修复、重启或部署 FeishuBot 自身时使用。规定验证、提交和延迟重启流程。
 ---
 
-# FeishuBot self-update and safe restart
+# FeishuBot 自更新
 
-This skill is for changes to FeishuBot itself: server code, runtime config, cards, prompt building, AI runner behavior, scheduler behavior, manager script, workspace instructions, or skills. The bot is running the agent as a subprocess, so an immediate restart can kill the response before Feishu receives it. Use the delayed restart workflow.
-
-## Mental model
-
-The project root is one level above this workspace:
-
-```text
-../
-├── manager
-├── pending_restart.json
-├── feishu-server/
-└── agent-workspace/
-```
-
-The server process is managed by `../manager`. It supports:
-
-```text
-../manager start
-../manager stop
-../manager restart
-../manager deferred-restart 5
-../manager status
-../manager log
-```
-
-For self-updates from inside a Feishu AI response, use only `../manager deferred-restart 5`.
-
-## Safe update workflow
-
-1. Understand the requested behavior and inspect the relevant files.
-2. Make surgical edits under `../feishu-server`, `../manager`, `../AGENTS.md`, or `.` as needed.
-3. Validate the changed behavior:
-   - Python syntax: `cd ../feishu-server && PYTHONPATH=. python -m compileall -q .`
-   - Unit tests if present: `cd ../feishu-server && PYTHONPATH=. python -m unittest discover -s tests -q`
-   - JSON config: `cd ../feishu-server && python -m json.tool config.json >/dev/null`
-   - Shell scripts: `cd .. && bash -n manager hooks/commit-msg`
-4. Check Git status and avoid committing secrets or runtime data:
-   - `.env`, `.venv/`, `.server.pid`, `feishu-server/data/`, `feishu-server/logs/`, `agent-workspace/download/`, and `pending_restart.json` must stay untracked.
-5. Commit the update if the directory is a Git repo.
-6. Write `../pending_restart.json` with the Feishu notification target if available.
-7. Run `../manager deferred-restart 5`.
-8. Return a concise Feishu answer explaining what changed and that a delayed restart was scheduled.
-
-## Commit format
-
-Commit subjects must start with a semantic version:
-
-```text
-v1.2.3 short description
-```
-
-Examples:
-
-```text
-v1.0.1 fix topic resume routing
-v1.1.0 add scheduler task API
-v2.0.0 change prompt protocol
-```
-
-Use a patch version for bug fixes and doc-only changes, minor for compatible features, major for breaking behavior.
-
-If committing from an assistant environment that requires attribution, include:
-
-```text
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-```
-
-## pending_restart.json
-
-Create this file in the project root before scheduling the deferred restart:
-
-```json
-{
-  "receive_id_type": "open_id",
-  "receive_id": "ou_xxx",
-  "reply_text": "FeishuBot 已更新并完成延迟重启。"
-}
-```
-
-Use the current Feishu sender/open_id when the prompt context provides it. If no reliable recipient is available, omit `receive_id`; no maintainer fallback is configured.
-
-Keep the message short because it will be sent as a restart-complete card after the new process starts.
-
-## Restart rules
-
-- Use `../manager deferred-restart 5` for self-updates.
-- Do not run `../manager restart` from inside the AI response path.
-- Do not kill the Python server process directly.
-- Do not use scheduler shell tasks as a restart shortcut.
-- If validation fails, do not restart; report the failing command and the relevant error.
-
-## Quick command template
-
-Use this shape after edits:
+项目根目录是工作区的上一级：`../`。机器人正在当前 Agent 进程中运行，直接重启会中断回复；自更新只能使用延迟重启。
 
 ```bash
-cd ..
-cd feishu-server
-python -m json.tool config.json >/dev/null
-PYTHONPATH=. python -m compileall -q .
-PYTHONPATH=. python -m unittest discover -s tests -q
-cd ..
-bash -n manager hooks/commit-msg
-git status --short
-git add <changed-files>
-git diff --cached --check
-git commit -m "v1.0.1 describe change" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-printf '%s\n' '{"reply_text":"FeishuBot 已更新并将在几秒内完成重启。"}' > pending_restart.json
-./manager deferred-restart 5
+../manager start|stop|restart|deferred-restart|status|log
 ```
 
-Replace the version and message with the actual change. Use `apply_patch` or normal editor tooling for file edits; do not create secrets in source files.
+本会话中只允许：
 
-## Final answer shape
+```bash
+../manager deferred-restart 5
+```
 
-When done, report:
+## 流程
 
-1. What changed.
-2. What validation passed.
-3. The commit version/hash if committed.
-4. Whether deferred restart was scheduled.
+1. 阅读相关代码、配置或技能，做必要且局部的修改。
+2. 验证修改：
+
+   ```bash
+   cd ../feishu-server
+   PYTHONPATH=. python -m compileall -q .
+   PYTHONPATH=. python -m unittest discover -s tests -q
+   python -m json.tool config.json >/dev/null
+   python -m json.tool model.json >/dev/null
+   cd ..
+   bash -n manager hooks/commit-msg
+   ```
+
+3. 检查 Git 状态。不得提交 `.env`、`.venv/`、`.server.pid`、`pending_restart.json`、`feishu-server/data/`、`feishu-server/logs/`、`agent-workspace/workfolder/`、`agent-workspace/scheduler/`、`agent-workspace/memory/`。
+4. 若当前目录是 Git 仓库，提交版本化 commit：
+
+   ```text
+   vX.Y.Z concise change
+
+   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+   ```
+
+5. 若已知当前飞书用户 open_id，写入 `../pending_restart.json`：
+
+   ```json
+   {"receive_id_type":"open_id","receive_id":"ou_xxx","reply_text":"FeishuBot 已更新并完成延迟重启。"}
+   ```
+
+   未知用户时不要猜测或写维护者兜底。
+6. 执行 `../manager deferred-restart 5`。只有验证通过才重启。
+
+## 禁止事项
+
+- 不要在回复过程中运行 `restart`，不要直接 kill 服务进程。
+- 不要用定时任务作为重启捷径。
+- 验证失败时停止并报告错误，不要重启。
+- 不要把密钥、token 或用户私密数据写入源码、日志示例或 commit。

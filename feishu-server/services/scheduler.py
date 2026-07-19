@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import cards
-from config import Config
+from config import Config, ConfigError
 from services.ai_runner import AIRunner
 from services.messenger import FeishuApiError, Messenger
 
@@ -80,8 +80,8 @@ class ScheduledTask:
             prompt=str(payload.get("prompt", data.get("prompt") or "")),
             script=str(payload.get("script", data.get("script") or "")),
             args=list(args),
-            tool=payload.get("tool", data.get("tool")),
-            model=payload.get("model", data.get("model")),
+            tool=_optional_string(payload.get("tool", data.get("tool")), "payload.tool"),
+            model=_optional_string(payload.get("model", data.get("model")), "payload.model"),
             timeout_seconds=timeout_seconds,
             enabled=bool(data.get("enabled", True)),
             last_run_minute=str(data.get("last_run_minute") or ""),
@@ -129,6 +129,7 @@ class Scheduler:
         self.ai_runner = ai_runner
         self.path = config.resolve_path("scheduler.data_file")
         self.workspace = config.resolve_path("ai.workspace")
+        self.script_root = self.workspace / "scheduler"
         self.host = str(config.get("scheduler.host", "127.0.0.1"))
         self.port = int(config.get("scheduler.port", 8066))
         self.tick_seconds = int(config.get("scheduler.tick_seconds", 60))
@@ -138,6 +139,7 @@ class Scheduler:
         self._server: ThreadingHTTPServer | None = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace.mkdir(parents=True, exist_ok=True)
+        self.script_root.mkdir(parents=True, exist_ok=True)
         self._load()
 
     def start(self) -> None:
@@ -238,25 +240,29 @@ class Scheduler:
         logger.info("定时任务执行结束：ID=%s 结果字符=%s", task.id, len(last_result))
 
     def _execute_agent_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str]:
+        try:
+            tool = task.tool or self.config.default_tool()
+            model = self.config.resolve_model(tool, task.model) if task.model else self.config.default_model(tool)
+        except (ConfigError, AttributeError) as exc:
+            result = f"无法解析 AI CLI 或模型：{exc}"
+            return cards.build_error_card("AI 定时任务失败", result), result
         logger.info(
-            "开始执行 AI 定时任务：ID=%s CLI=%s 模型=%s 超时=%ss 完整提示词：\n%s",
+            "开始执行 AI 定时任务：ID=%s CLI=%s 模型=%s 超时=%ss",
             task.id,
-            task.tool or "（当前配置）",
-            task.model or "（当前配置）",
+            tool,
+            model,
             task.timeout_seconds,
-            task.prompt,
         )
         result = self.ai_runner.run(
             {
+                "workfolder": self._task_dir_relative(task.id),
+                "user_id": task.receive_id if task.receive_id_type == "open_id" else "scheduler",
                 "user_input": task.prompt,
-                "context": {
-                    "scheduled_task_id": task.id,
-                    "scheduled_task_name": task.name,
-                },
+                "context": [],
             },
             f"scheduled-{task.id}-{int(time.time())}",
-            tool=task.tool,
-            model=task.model,
+            tool=tool,
+            model=model,
             timeout_seconds=task.timeout_seconds,
         )
         if result.ok:
@@ -265,7 +271,7 @@ class Scheduler:
 
     def _execute_script_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str]:
         try:
-            script_path = self._resolve_script_path(task.script)
+            script_path = self._resolve_script_path(task)
         except TaskValidationError as exc:
             return cards.build_error_card("脚本定时任务失败", str(exc)), str(exc)
         command = [str(script_path), *task.args]
@@ -362,7 +368,7 @@ class Scheduler:
         if not task.legacy_command.strip():
             raise TaskValidationError("旧 shell 任务缺少 command，无法迁移为脚本任务")
         safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", task.id).strip("-") or uuid.uuid4().hex[:12]
-        relative_path = Path(".scheduler-legacy") / f"{safe_id}.sh"
+        relative_path = Path("scheduler") / safe_id / "legacy.sh"
         script_path = (self.workspace / relative_path).resolve()
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(
@@ -389,19 +395,28 @@ class Scheduler:
         validate_cron(task.cron)
         if task.type == "agent" and not task.prompt.strip():
             raise TaskValidationError("AI 任务的 payload.prompt 不能为空")
+        if task.type == "agent" and task.tool:
+            try:
+                self.config.tool_config(task.tool)
+                self.config.model_config(task.tool)
+            except ConfigError as exc:
+                raise TaskValidationError(f"AI 任务的 payload.tool 无效：{task.tool}") from exc
         if task.type == "script":
-            script_path = self._resolve_script_path(task.script)
+            script_path = self._resolve_script_path(task)
             if not script_path.is_file():
                 raise TaskValidationError(f"脚本不存在或不是文件：{task.script}")
             if not script_path.stat().st_mode & 0o111:
                 raise TaskValidationError(f"脚本不可执行：{task.script}")
 
-    def _resolve_script_path(self, script: str) -> Path:
-        if not script:
+    def _resolve_script_path(self, task: ScheduledTask) -> Path:
+        if not task.script:
             raise TaskValidationError("脚本任务的 payload.script 不能为空")
-        relative_path = Path(script)
+        relative_path = Path(task.script)
         if relative_path.is_absolute():
             raise TaskValidationError("脚本路径必须相对于 agent-workspace")
+        expected_root = Path("scheduler") / _safe_task_id(task.id)
+        if relative_path.parts[:2] != expected_root.parts:
+            raise TaskValidationError(f"脚本必须位于 {expected_root.as_posix()}/ 目录下")
         workspace = self.workspace.resolve()
         candidate = (workspace / relative_path).resolve()
         try:
@@ -409,6 +424,15 @@ class Scheduler:
         except ValueError as exc:
             raise TaskValidationError("脚本路径不能离开 agent-workspace") from exc
         return candidate
+
+    def _task_dir(self, task_id: str) -> Path:
+        task_dir = self.script_root / _safe_task_id(task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+        return task_dir.resolve()
+
+    @staticmethod
+    def _task_dir_relative(task_id: str) -> str:
+        return (Path("scheduler") / _safe_task_id(task_id)).as_posix()
 
     @staticmethod
     def _kill_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
@@ -575,6 +599,18 @@ def _as_text(value: str | bytes | bytearray | memoryview | None) -> str:
     if isinstance(value, (bytes, bytearray, memoryview)):
         return bytes(value).decode("utf-8", errors="replace")
     return ""
+
+
+def _optional_string(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TaskValidationError(f"{field} 必须是字符串")
+    return value.strip() or None
+
+
+def _safe_task_id(task_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", task_id).strip("._") or "task"
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

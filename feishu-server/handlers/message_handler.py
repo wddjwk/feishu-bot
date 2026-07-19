@@ -114,7 +114,7 @@ class MessageHandler(BaseHandler):
 
         threading.Thread(
             target=self._run_ai_and_reply,
-            args=(message, prompt_result.prompt, reaction_id, conversation),
+            args=(message, prompt_result.prompt, prompt_result.work_dir, reaction_id, conversation),
             name=f"ai-{message_id}",
             daemon=True,
         ).start()
@@ -123,6 +123,7 @@ class MessageHandler(BaseHandler):
         self,
         message: dict[str, Any],
         prompt: str,
+        delivery_dir: Path,
         reaction_id: str | None,
         conversation: Conversation,
     ) -> None:
@@ -137,7 +138,7 @@ class MessageHandler(BaseHandler):
                 resume_session_id=conversation.session_id if conversation.resume else None,
             )
             if result.ok:
-                delivery = extract_file_deliveries(result.result, self.config.resolve_path("ai.workspace"))
+                delivery = extract_file_deliveries(result.result, delivery_dir)
                 if delivery.paths:
                     self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
                     return

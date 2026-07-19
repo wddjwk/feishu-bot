@@ -331,6 +331,91 @@ class ParseOutputTests(unittest.TestCase):
         self.assertEqual(calls["env"]["MODEL_ENDPOINT"], "https://model.example.test")
         self.assertEqual(calls["env"]["MODEL_FLAG"], "1")
 
+    def test_logs_parsed_reply_instead_of_raw_stream_json(self):
+        class FakeConfig:
+            def current_tool(self):
+                return "claude"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": [],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+            def resolve_path(self, _dotted):
+                return Path(".")
+
+            def get(self, _dotted, default=None):
+                return 10 if default is None else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                return '{"type":"result","result":"简洁回复"}\n', ""
+
+        with patch("services.ai_runner.subprocess.Popen", return_value=FakeProcess()), self.assertLogs(
+            "services.ai_runner", level="INFO"
+        ) as logs:
+            result = AIRunner(FakeConfig()).run("用户问题", "m1")
+
+        output = "\n".join(logs.output)
+        self.assertTrue(result.ok)
+        self.assertIn("AI 回复：", output)
+        self.assertIn("简洁回复", output)
+        self.assertNotIn('{"type":"result"', output)
+
+    def test_always_runs_from_agent_workspace(self):
+        calls = {}
+
+        class FakeConfig:
+            def __init__(self, workspace: Path) -> None:
+                self.workspace = workspace
+
+            def current_tool(self):
+                return "claude"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": [],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+            def resolve_path(self, _dotted):
+                return self.workspace
+
+            def get(self, _dotted, default=None):
+                return 10 if default is None else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                return '{"type":"result","result":"OK"}\n', ""
+
+        def fake_popen(_command, **kwargs):
+            calls["cwd"] = kwargs["cwd"]
+            return FakeProcess()
+
+        with TemporaryDirectory() as tmp, patch("services.ai_runner.subprocess.Popen", fake_popen):
+            workspace = Path(tmp) / "agent-workspace"
+            result = AIRunner(FakeConfig(workspace)).run("hello", "m1")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(calls["cwd"], str(workspace))
+
 
 if __name__ == "__main__":
     unittest.main()

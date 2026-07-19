@@ -28,6 +28,21 @@ class FakeConfig:
         }
         return values.get(dotted, default)
 
+    def default_tool(self):
+        return "default-cli"
+
+    def default_model(self, _tool):
+        return "default-model"
+
+    def resolve_model(self, _tool, requested=None):
+        return {"fast": "fast-model"}.get(requested, requested or "default-model")
+
+    def tool_config(self, _tool):
+        return {}
+
+    def model_config(self, _tool):
+        return {}
+
 
 class FakeMessenger:
     def __init__(self) -> None:
@@ -80,12 +95,82 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(saved["payload"]["prompt"], "总结今天")
         self.assertEqual(runner.calls[0]["timeout_seconds"], 30)
         self.assertEqual(runner.calls[0]["prompt"]["user_input"], "总结今天")
+        self.assertEqual(runner.calls[0]["prompt"]["context"], [])
         self.assertEqual(messenger.cards[0]["receive_id"], "ou_user")
+
+    def test_agent_task_uses_model_file_defaults_when_not_overridden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scheduler, _messenger, runner = self._scheduler(Path(tmp))
+            saved = scheduler.upsert_task(
+                {
+                    "id": "default-agent",
+                    "name": "默认模型任务",
+                    "type": "agent",
+                    "cron": "0 9 * * *",
+                    "target": {"receive_id": "ou_user"},
+                    "payload": {"prompt": "执行每日检查"},
+                }
+            )
+            scheduler._execute_task(ScheduledTask.from_dict(saved))
+
+        self.assertEqual(runner.calls[0]["tool"], "default-cli")
+        self.assertEqual(runner.calls[0]["model"], "default-model")
+
+    def test_agent_task_resolves_explicit_model_alias_for_selected_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scheduler, _messenger, runner = self._scheduler(Path(tmp))
+            saved = scheduler.upsert_task(
+                {
+                    "id": "custom-agent",
+                    "name": "指定模型任务",
+                    "type": "agent",
+                    "cron": "0 9 * * *",
+                    "target": {"receive_id": "ou_user"},
+                    "payload": {"prompt": "执行检查", "tool": "claude", "model": "fast"},
+                }
+            )
+            scheduler._execute_task(ScheduledTask.from_dict(saved))
+
+        self.assertEqual(runner.calls[0]["tool"], "claude")
+        self.assertEqual(runner.calls[0]["model"], "fast-model")
+
+    def test_agent_task_uses_task_scoped_scheduler_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scheduler, _messenger, runner = self._scheduler(root)
+            saved = scheduler.upsert_task(
+                {
+                    "id": "owner-agent",
+                    "name": "用户归属任务",
+                    "type": "agent",
+                    "cron": "0 9 * * *",
+                    "target": {"receive_id": "ou_target"},
+                    "payload": {"prompt": "完成检查"},
+                }
+            )
+            scheduler._execute_task(ScheduledTask.from_dict(saved))
+
+        self.assertEqual(runner.calls[0]["prompt"]["user_id"], "ou_target")
+        self.assertEqual(runner.calls[0]["prompt"]["workfolder"], "scheduler/owner-agent")
+
+    def test_rejects_non_string_agent_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scheduler, _messenger, _runner = self._scheduler(Path(tmp))
+            with self.assertRaises(TaskValidationError):
+                scheduler.upsert_task(
+                    {
+                        "id": "bad-model",
+                        "type": "agent",
+                        "cron": "0 9 * * *",
+                        "target": {"receive_id": "ou_user"},
+                        "payload": {"prompt": "检查", "model": 7},
+                    }
+                )
 
     def test_script_task_uses_argv_without_a_shell(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            script = root / "workspace" / "scripts" / "report.sh"
+            script = root / "workspace" / "scheduler" / "report" / "report.sh"
             script.parent.mkdir(parents=True)
             script.write_text("#!/usr/bin/env bash\necho report\n", encoding="utf-8")
             script.chmod(0o700)
@@ -97,7 +182,7 @@ class SchedulerTests(unittest.TestCase):
                     "type": "script",
                     "cron": "0 * * * *",
                     "target": {"receive_id": "ou_user", "receive_id_type": "open_id"},
-                    "payload": {"script": "scripts/report.sh", "args": ["--today"]},
+                    "payload": {"script": "scheduler/report/report.sh", "args": ["--today"]},
                 }
             )
 
@@ -160,6 +245,7 @@ class SchedulerTests(unittest.TestCase):
             script_path = root / "workspace" / migrated["payload"]["script"]
             self.assertEqual(migrated["type"], "script")
             self.assertTrue(script_path.is_file())
+            self.assertEqual(migrated["payload"]["script"], "scheduler/legacy-echo/legacy.sh")
             self.assertTrue(script_path.stat().st_mode & 0o111)
             self.assertNotIn("set -euo pipefail", script_path.read_text(encoding="utf-8"))
 
@@ -169,7 +255,7 @@ class SchedulerTests(unittest.TestCase):
     def test_script_timeout_kills_the_entire_process_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            script = root / "workspace" / "scripts" / "slow.sh"
+            script = root / "workspace" / "scheduler" / "slow" / "slow.sh"
             script.parent.mkdir(parents=True)
             script.write_text("#!/usr/bin/env bash\nsleep 60\n", encoding="utf-8")
             script.chmod(0o700)
@@ -182,7 +268,7 @@ class SchedulerTests(unittest.TestCase):
                     "cron": "0 * * * *",
                     "timeout_seconds": 1,
                     "target": {"receive_id": "ou_user"},
-                    "payload": {"script": "scripts/slow.sh"},
+                    "payload": {"script": "scheduler/slow/slow.sh"},
                 }
             )
 
