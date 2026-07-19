@@ -113,14 +113,21 @@ class Messenger:
         items = data.get("items") or []
         return items[0] if items else None
 
-    def list_messages(self, container_id_type: str, container_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    def list_messages(
+        self,
+        container_id_type: str,
+        container_id: str,
+        *,
+        limit: int = 50,
+        sort_type: str = "ByCreateTimeAsc",
+    ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         page_token = ""
         while len(items) < limit:
             query = {
                 "container_id_type": container_id_type,
                 "container_id": container_id,
-                "sort_type": "ByCreateTimeAsc",
+                "sort_type": sort_type,
                 "page_size": min(50, limit - len(items)),
                 "card_msg_content_type": "user_card_content",
             }
@@ -132,28 +139,6 @@ class Messenger:
                 break
             page_token = data["page_token"]
         return items
-
-    def find_user_open_id_by_name(self, name: str, *, limit: int = 200) -> str | None:
-        items: list[dict[str, Any]] = []
-        page_token = ""
-        while len(items) < limit:
-            query = {
-                "department_id": "0",
-                "department_id_type": "open_department_id",
-                "user_id_type": "open_id",
-                "page_size": min(50, limit - len(items)),
-            }
-            if page_token:
-                query["page_token"] = page_token
-            data = self._request_json("GET", "/contact/v3/users/find_by_department", query=query).get("data", {})
-            items.extend(data.get("items") or [])
-            if not data.get("has_more") or not data.get("page_token"):
-                break
-            page_token = data["page_token"]
-        matches = [item for item in items if item.get("name") == name]
-        if len(matches) != 1:
-            return None
-        return matches[0].get("open_id") or matches[0].get("user_id")
 
     def get_bot_open_id(self) -> str:
         with self._bot_open_id_lock:

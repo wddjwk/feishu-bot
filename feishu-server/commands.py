@@ -68,7 +68,7 @@ class CommandRegistry:
 registry = CommandRegistry()
 
 
-@registry.exact(["/help", "帮助", "?"], "显示帮助卡片")
+@registry.exact(["/help"], "显示帮助信息")
 def _help(ctx: CommandContext) -> CommandResponse:
     return CommandResponse(cards.build_help_card(registry.help_items()))
 
@@ -78,14 +78,16 @@ def _cli(ctx: CommandContext) -> CommandResponse:
     parts = ctx.text.split(maxsplit=1)
     if len(parts) == 1:
         tool = ctx.config.current_tool()
-        return CommandResponse(cards.build_generic_card("当前 AI CLI", f"`{tool}`", "blue"))
+        model = ctx.config.resolve_model(tool)
+        lines = [f"当前：`{tool}` / `{model}`", "", "**支持的 CLI**"]
+        for name in ctx.config.tools():
+            lines.append(f"- `{name}`：默认模型 `{ctx.config.default_model(name)}`")
+        return CommandResponse(cards.build_generic_card("当前 AI CLI", "\n".join(lines), "blue"))
     tool = parts[1].strip().lower()
     try:
-        ctx.config.set_tool(tool)
+        model = ctx.config.set_tool(tool)
     except ConfigError as exc:
-        supported = ", ".join(ctx.config.tools())
-        return CommandResponse(cards.build_error_card("CLI 切换失败", str(exc), f"支持：{supported}"))
-    model = ctx.config.resolve_model(tool)
+        return CommandResponse(cards.build_error_card("CLI 切换失败", str(exc)))
     return CommandResponse(cards.build_generic_card("AI CLI 已切换", f"当前工具：`{tool}`\n当前模型：`{model}`", "green"))
 
 
@@ -94,8 +96,19 @@ def _model(ctx: CommandContext) -> CommandResponse:
     parts = ctx.text.split(maxsplit=1)
     tool = ctx.config.current_tool()
     if len(parts) == 1:
-        lines = [f"- `{name}`：`{model}`" for name, model in ctx.config.model_status().items()]
-        return CommandResponse(cards.build_generic_card("当前模型配置", "\n".join(lines), "blue"))
+        options = ctx.config.model_options(tool)
+        lines = [
+            f"当前 CLI：`{tool}`",
+            f"默认模型：`{options['default_model']}`",
+            f"当前模型：`{options['current_model']}`",
+            "",
+            "**支持模型**",
+        ]
+        lines.extend(f"- `{model}`" for model in options["model_list"])
+        if options["aliases"]:
+            lines.extend(["", "**别名**"])
+            lines.extend(f"- `{alias}` → `{model}`" for alias, model in options["aliases"].items())
+        return CommandResponse(cards.build_generic_card("模型配置", "\n".join(lines), "blue"))
     try:
         model = ctx.config.set_model(tool, parts[1].strip())
     except ConfigError as exc:
@@ -103,27 +116,30 @@ def _model(ctx: CommandContext) -> CommandResponse:
     return CommandResponse(cards.build_generic_card("模型已切换", f"`{tool}` → `{model}`", "green"))
 
 
-@registry.exact(["/reload"], "重新加载 config.json")
+@registry.exact(["/reload"], "重新加载 config.json 和 model.json")
 def _reload(ctx: CommandContext) -> CommandResponse:
     try:
         ctx.config.reload()
         cards.configure_card_width(str(ctx.config.get("feishu.card_width", "half")))
+        cards.configure_tool_icons(ctx.config.get("feishu.tool_icons", {}))
     except Exception as exc:
         return CommandResponse(cards.build_error_card("配置重载失败", str(exc)))
-    return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 读取最新配置。", "green"))
+    return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 和 `model.json` 读取最新配置。", "green"))
 
 
-@registry.exact(["/status"], "展示版本、工具、模型、超时与调度端口")
+@registry.exact(["/status"], "展示版本、CLI、模型、运行任务和定时任务")
 def _status(ctx: CommandContext) -> CommandResponse:
     tool = ctx.config.current_tool()
     model = ctx.config.resolve_model(tool)
+    running = ctx.ai_runner.running()
+    timers = ctx.scheduler.list_tasks() if ctx.scheduler else []
     content = "\n".join(
         [
             f"- 版本：`{ctx.config.version()}`",
             f"- AI CLI：`{tool}`",
             f"- 模型：`{model}`",
-            f"- 超时：`{ctx.config.get('ai.timeout_seconds')}s`",
-            f"- 调度端口：`{ctx.config.get('scheduler.port')}`",
+            f"- 正在运行：`{len(running)}`",
+            f"- 定时任务：`{len(timers)}`",
         ]
     )
     return CommandResponse(cards.build_generic_card("FeishuBot 状态", content, "blue"))

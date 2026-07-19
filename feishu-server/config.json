@@ -5,19 +5,17 @@
     "reply_in_thread": false,
     "reaction_processing": "OnIt",
     "card_width": "half",
-    "maintainer_name": ""
+    "tool_icons": {
+      "qoder": "🖥️",
+      "claude": "🧠",
+      "copilot": "🤖",
+      "codebuddy": "🐇"
+    }
   },
   "ai": {
-    "tool": "codebuddy",
     "timeout_seconds": 36000,
     "max_argument_prompt_bytes": 100000,
     "workspace": "../agent-workspace",
-    "current_models": {
-      "qoder": "DeepSeek-V4-Flash",
-      "claude": "deepseek-v4-flash",
-      "copilot": "claude-sonnet-4.6",
-      "codebuddy": "deepseek-v4-pro"
-    },
     "tools": {
       "qoder": {
         "command": "qodercli",
@@ -25,14 +23,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "stream_json",
-        "default_model": "DeepSeek-V4-Flash",
-        "aliases": {
-          "default": "DeepSeek-V4-Flash",
-          "max": "DeepSeek-V4",
-          "middle": "DeepSeek-V4-Flash",
-          "min": "DeepSeek-V4-Flash"
-        }
+        "output_parser": "stream_json"
       },
       "claude": {
         "command": "claude",
@@ -40,14 +31,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "stream_json",
-        "default_model": "deepseek-v4-flash",
-        "aliases": {
-          "default": "deepseek-v4-flash",
-          "max": "deepseek-v4",
-          "middle": "deepseek-v4-flash",
-          "min": "deepseek-v4-flash"
-        }
+        "output_parser": "stream_json"
       },
       "copilot": {
         "command": "copilot",
@@ -55,14 +39,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "copilot_json",
-        "default_model": "claude-sonnet-4.6",
-        "aliases": {
-          "default": "claude-sonnet-4.6",
-          "max": "claude-opus-4.7",
-          "middle": "claude-sonnet-4.6",
-          "min": "claude-haiku-4.5"
-        }
+        "output_parser": "copilot_json"
       },
       "codebuddy": {
         "command": "codebuddy",
@@ -70,20 +47,13 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "argument",
-        "output_parser": "stream_json",
-        "default_model": "deepseek-v4-flash",
-        "aliases": {
-          "default": "deepseek-v4-flash",
-          "max": "deepseek-v4",
-          "middle": "deepseek-v4-flash",
-          "min": "deepseek-v4-flash"
-        }
+        "output_parser": "stream_json"
       }
     }
   },
   "prompt": {
-    "reply_chain_limit": 20,
-    "thread_message_limit": 50,
+    "group_thread_context_limit": 100,
+    "download_retention_days": 7,
     "download_dir": "../agent-workspace/download"
   },
   "lark_cli": {

@@ -286,6 +286,51 @@ class ParseOutputTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("超过参数输入上限", result.error)
 
+    def test_model_environment_is_injected_into_cli_process(self):
+        calls = {}
+
+        class FakeConfig:
+            def current_tool(self):
+                return "claude"
+
+            def resolve_model(self, _tool):
+                return "model-a"
+
+            def tool_config(self, _tool):
+                return {
+                    "command": "claude",
+                    "base_args": [],
+                    "prompt_transport": "stdin",
+                    "output_parser": "stream_json",
+                }
+
+            def model_environment(self, _tool):
+                return {"MODEL_ENDPOINT": "https://model.example.test", "MODEL_FLAG": "1"}
+
+            def resolve_path(self, _dotted):
+                return Path(".")
+
+            def get(self, _dotted, default=None):
+                return 10 if default is None else default
+
+        class FakeProcess:
+            pid = 12345
+            returncode = 0
+
+            def communicate(self, input=None, timeout=None):
+                return '{"type":"result","result":"OK"}\n', ""
+
+        def fake_popen(_command, **kwargs):
+            calls["env"] = kwargs["env"]
+            return FakeProcess()
+
+        with patch("services.ai_runner.subprocess.Popen", fake_popen):
+            result = AIRunner(FakeConfig()).run("hello", "m1")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(calls["env"]["MODEL_ENDPOINT"], "https://model.example.test")
+        self.assertEqual(calls["env"]["MODEL_FLAG"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

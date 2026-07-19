@@ -1,6 +1,5 @@
 import json
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -47,10 +46,9 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(resolved["model"], "model-a")
         self.assertEqual(resolved["link_type"], "bot_reply")
 
-    def test_migrates_flat_json_to_versioned_indexes(self):
+    def test_resets_legacy_flat_json_without_creating_a_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            now = int(time.time())
             store_path = root / "data" / "session_map.json"
             store_path.parent.mkdir(parents=True)
             store_path.write_text(
@@ -63,8 +61,8 @@ class SessionStoreTests(unittest.TestCase):
                                 "tool": "claude",
                                 "model": "model-a",
                                 "metadata": {"source_message_id": "user-message"},
-                                "created_at": now - 10,
-                                "updated_at": now,
+                                "created_at": 1,
+                                "updated_at": 2,
                             }
                         ]
                     }
@@ -73,16 +71,12 @@ class SessionStoreTests(unittest.TestCase):
             )
 
             store = SessionStore(FakeConfig(root))
-            migrated = store.get("bot-card")
             persisted = json.loads(store_path.read_text(encoding="utf-8"))
-            self.assertTrue((root / "data" / "session_map.json.v1.bak").exists())
+            self.assertFalse((root / "data" / "session_map.json.v1.bak").exists())
 
         self.assertEqual(persisted["version"], STORE_VERSION)
-        self.assertIn("session-1", persisted["sessions"])
-        self.assertIn("bot-card", persisted["links"])
-        self.assertEqual(migrated["metadata"], {"source_message_id": "user-message"})
-        self.assertEqual(migrated["created_at"], now - 10)
-        self.assertEqual(migrated["updated_at"], now)
+        self.assertEqual(persisted["sessions"], {})
+        self.assertEqual(persisted["links"], {})
 
     def test_bounds_links_and_cleans_expired_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,18 +101,6 @@ class SessionStoreTests(unittest.TestCase):
 
             self.assertEqual(result["sessions"], 1)
             self.assertEqual(store.stats()["links"], 0)
-
-    def test_uses_legacy_max_entries_when_max_links_is_not_configured(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            config = FakeConfig(Path(tmp))
-            config.options.pop("session_store.max_links")
-            config.options["session_store.max_entries"] = 1
-            store = SessionStore(config)
-            store.set("first", "session-1", tool="claude", model="model-a")
-            store.set("second", "session-2", tool="claude", model="model-a")
-
-            self.assertEqual(store.stats()["links"], 1)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,31 +58,19 @@ class MessageHandler(BaseHandler):
             logger.warning("收到的消息事件缺少 message_id，已忽略")
             return
         if self._is_duplicate(message_id):
-            logger.info("忽略重复消息：消息=%s", message_id)
+            logger.debug("忽略重复消息：消息=%s", message_id)
             return
         if message.get("sender_type") in {"bot", "app"}:
-            logger.info("忽略机器人或应用消息：消息=%s", message_id)
+            logger.debug("忽略机器人或应用消息：消息=%s", message_id)
             return
         if not self._should_handle(message):
-            logger.info("忽略未 @ 当前机器人的群消息：消息=%s", message_id)
+            logger.debug("忽略未 @ 当前机器人的群消息：消息=%s", message_id)
             return
         if is_standalone_file_message(message):
             logger.info("收到独立文件消息，等待用户回复文件后再处理：消息=%s", message_id)
             return
 
         text = extract_text(message).strip()
-        logger.info(
-            "收到用户消息：消息=%s 类型=%s 聊天类型=%s 话题=%s 根消息=%s 父消息=%s 发送者类型=%s 发送者=%s 文本长度=%s",
-            message_id,
-            message.get("message_type"),
-            message.get("chat_type"),
-            message.get("thread_id"),
-            message.get("root_id"),
-            message.get("parent_id"),
-            message.get("sender_type"),
-            message.get("sender_id"),
-            len(text),
-        )
         ctx = commands.CommandContext(
             text=text,
             message=message,
@@ -94,7 +82,6 @@ class MessageHandler(BaseHandler):
         )
         command_response = commands.registry.match(ctx)
         if command_response:
-            logger.info("命令已匹配，直接返回命令卡片：消息=%s", message_id)
             self._reply_card(message, command_response.card)
             return
 
@@ -118,7 +105,7 @@ class MessageHandler(BaseHandler):
             return
 
         try:
-            prompt_result = build_prompt(message, self.messenger, self.config, resume=conversation.resume)
+            prompt_result = build_prompt(message, self.messenger, self.config)
         except FeishuApiError as exc:
             logger.exception("构建 AI 提示词失败：消息=%s", message_id)
             self._reply_card(message, cards.build_error_card("上下文构建失败", str(exc)))
@@ -135,20 +122,12 @@ class MessageHandler(BaseHandler):
     def _run_ai_and_reply(
         self,
         message: dict[str, Any],
-        prompt: dict[str, Any],
+        prompt: str,
         reaction_id: str | None,
         conversation: Conversation,
     ) -> None:
         message_id = message["message_id"]
         try:
-            logger.info(
-                "开始 AI 回复：消息=%s 会话=%s 模式=%s CLI=%s 模型=%s",
-                message_id,
-                conversation.session_id,
-                "续接" if conversation.resume else "新建",
-                conversation.tool,
-                conversation.model,
-            )
             result = self.ai_runner.run(
                 prompt,
                 message_id,
@@ -175,7 +154,7 @@ class MessageHandler(BaseHandler):
                 return
             if result.ok and result.session_id:
                 self._save_session_mappings(message, reply, conversation, result.session_id)
-            logger.info("AI 回复卡片已发送：请求消息=%s 回复消息=%s", message_id, reply.get("message_id"))
+            logger.debug("AI 回复卡片已发送：请求消息=%s 回复消息=%s", message_id, reply.get("message_id"))
         finally:
             self._delete_reaction(message_id, reaction_id)
 
@@ -301,19 +280,13 @@ class MessageHandler(BaseHandler):
                     message.get("thread_id"),
                 )
                 return None
-            logger.info("解析到话题续接会话：消息=%s 会话=%s CLI=%s 模型=%s", message.get("message_id"), session_id, tool, model)
+            logger.debug("解析到话题续接会话：消息=%s 会话=%s", message.get("message_id"), session_id)
             return Conversation(session_id=session_id, tool=tool, model=model, resume=True)
 
         tool = self.config.current_tool()
         model = self.config.resolve_model(tool)
         session_id = str(uuid4()) if self.ai_runner.supports_explicit_session(tool) else None
-        logger.info(
-            "创建新 AI 会话：消息=%s 会话=%s CLI=%s 模型=%s",
-            message.get("message_id"),
-            session_id or "由 CLI 输出确定",
-            tool,
-            model,
-        )
+        logger.debug("创建新 AI 会话：消息=%s 会话=%s", message.get("message_id"), session_id or "由 CLI 输出确定")
         return Conversation(session_id=session_id, tool=tool, model=model, resume=False)
 
     def _should_handle(self, message: dict[str, Any]) -> bool:
@@ -371,7 +344,7 @@ class MessageHandler(BaseHandler):
             return None
         try:
             reaction_id = self.messenger.add_reaction(message_id, emoji)
-            logger.info("已添加 OnIt 表情：消息=%s 表情=%s 关联=%s", message_id, emoji, reaction_id or "（未返回 ID）")
+            logger.debug("已添加 OnIt 表情：消息=%s 表情=%s", message_id, emoji)
             return reaction_id
         except FeishuApiError as exc:
             logger.warning("添加 OnIt 表情失败：消息=%s 错误=%s", message_id, exc)
@@ -382,7 +355,7 @@ class MessageHandler(BaseHandler):
             return
         try:
             self.messenger.delete_reaction(message_id, reaction_id)
-            logger.info("已移除 OnIt 表情：消息=%s 表情=%s", message_id, reaction_id)
+            logger.debug("已移除 OnIt 表情：消息=%s 表情=%s", message_id, reaction_id)
         except FeishuApiError as exc:
             logger.warning("移除 OnIt 表情失败：消息=%s 表情=%s 错误=%s", message_id, reaction_id, exc)
 

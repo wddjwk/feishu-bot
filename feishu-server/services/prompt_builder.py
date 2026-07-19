@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from config import Config
 from services.messenger import FeishuApiError, Messenger
@@ -14,17 +18,13 @@ from services.messenger import FeishuApiError, Messenger
 
 logger = logging.getLogger(__name__)
 
-FILE_DELIVERY_PROTOCOL = (
-    "如需将生成或找到的本地文件交付给用户，请在最终回复中每行输出一个 "
-    "[[FEISHU_FILE:/agent-workspace 内的绝对路径]] 标记。服务会先发送该文件，再回复文件说明完成情况。"
-)
 IMAGE_KEY_PATTERN = re.compile(r"\bimg_[A-Za-z0-9_-]+\b")
 FILE_KEY_PATTERN = re.compile(r"\bfile_[A-Za-z0-9_-]+\b")
 
 
 @dataclass
 class PromptBuildResult:
-    prompt: dict[str, Any]
+    prompt: str
     attached_files: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -43,6 +43,9 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
 def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
     body = message.get("body") if isinstance(message.get("body"), dict) else {}
     sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
+    sender_id = sender.get("id") or sender.get("sender_id") or message.get("sender_id")
+    if isinstance(sender_id, dict):
+        sender_id = sender_id.get("open_id") or sender_id.get("user_id") or sender_id.get("union_id")
     return {
         "message_id": message.get("message_id"),
         "message_type": message.get("message_type") or message.get("msg_type"),
@@ -56,7 +59,7 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
         "chat_type": message.get("chat_type") or "",
         "mentions": message.get("mentions") if isinstance(message.get("mentions"), list) else body.get("mentions") or [],
         "sender_type": message.get("sender_type") or sender.get("sender_type"),
-        "sender_id": sender.get("id") or message.get("sender_id"),
+        "sender_id": sender_id or "",
         "raw": message,
     }
 
@@ -69,65 +72,38 @@ def build_prompt(
     message: dict[str, Any],
     messenger: Messenger,
     config: Config,
-    *,
-    resume: bool = False,
 ) -> PromptBuildResult:
-    if resume:
-        messages = _resume_context_messages(message, messenger, config)
-        attachments, references = _download_attachments(messages, messenger, config)
-        user_input = extract_text(message, resource_references=references).strip()
-        return PromptBuildResult(
-            {
-                "user_input": user_input,
-                "context": {
-                    "message_id": message.get("message_id"),
-                    "thread_id": message.get("thread_id"),
-                    "conversation_history": [],
-                    "root_reply_chain": [],
-                    "attached_files": attachments,
-                    "source_messages": _source_messages(messages),
-                    "file_delivery_protocol": FILE_DELIVERY_PROTOCOL,
-                    "resume": True,
-                },
-            },
-            attached_files=attachments,
-        )
+    reply_chain = _trace_reply_chain(message, messenger) if message.get("parent_id") else [message]
+    group_thread = _group_thread_context(message, messenger, config) if message.get("thread_id") and message.get("chat_type") == "group" else []
+    attachment_messages = _merge_messages(reply_chain, group_thread)
+    attachments, references = _download_attachments(attachment_messages, messenger, config)
 
-    if message.get("thread_id"):
-        history_limit = int(config.get("prompt.thread_message_limit", 50))
-        messages = messenger.list_messages(
-            "thread",
-            message["thread_id"],
-            limit=history_limit,
-        )
-        messages = [normalize_message(item) for item in messages]
-        if not any(item.get("message_id") == message.get("message_id") for item in messages):
-            messages.append(message)
-        messages.sort(key=lambda item: int(item.get("create_time") or 0))
-        if len(messages) > history_limit:
-            messages = messages[-history_limit:]
-        history_kind = "thread"
-    elif message.get("parent_id"):
-        messages = _trace_reply_chain(message, messenger, int(config.get("prompt.reply_chain_limit", 20)))
-        messages.sort(key=lambda item: int(item.get("create_time") or 0))
-        history_kind = "reply_chain"
-    else:
-        messages = [message]
-        history_kind = "single"
-
-    attachments, references = _download_attachments(messages, messenger, config)
-    history = [_history_line(item, references) for item in messages]
     user_input = extract_text(message, resource_references=references).strip()
-    context: dict[str, Any] = {
-        "message_id": message.get("message_id"),
-        "thread_id": message.get("thread_id"),
-        "conversation_history": history,
-        "root_reply_chain": history if history_kind == "reply_chain" else [],
-        "attached_files": attachments,
-        "source_messages": _source_messages(messages),
-        "file_delivery_protocol": FILE_DELIVERY_PROTOCOL,
-    }
-    return PromptBuildResult({"user_input": user_input, "context": context}, attached_files=attachments)
+    user_input = _append_attachment_references(
+        user_input,
+        attachments,
+        message_ids={str(item.get("message_id") or "") for item in reply_chain},
+    )
+
+    if group_thread:
+        context_messages = _without_message(group_thread, message.get("message_id"))
+        for item in _without_message(reply_chain, message.get("message_id")):
+            if not any(item.get("message_id") == existing.get("message_id") for existing in context_messages):
+                context_messages.append(item)
+        context_messages.sort(key=lambda item: int(item.get("create_time") or 0))
+    elif not message.get("thread_id"):
+        context_messages = _without_message(reply_chain, message.get("message_id"))
+        context_messages.sort(key=lambda item: int(item.get("create_time") or 0))
+    else:
+        context_messages = []
+
+    parts = [
+        f"用户 ID：{message.get('sender_id') or 'unknown'}",
+        f"用户输入：\n{user_input or '（无文本内容）'}",
+    ]
+    if context_messages:
+        parts.append("上下文：\n" + "\n".join(_history_line(item, references) for item in context_messages))
+    return PromptBuildResult("\n\n".join(parts), attached_files=attachments)
 
 
 def extract_text(
@@ -191,17 +167,11 @@ def _add_resource(
     resources.append({"key": key, "type": resource_type, "name": name})
 
 
-def _resume_context_messages(message: dict[str, Any], messenger: Messenger, config: Config) -> list[dict[str, Any]]:
-    if not message.get("parent_id"):
-        return [message]
-    return _trace_reply_chain(message, messenger, int(config.get("prompt.reply_chain_limit", 20)))
-
-
-def _trace_reply_chain(message: dict[str, Any], messenger: Messenger, limit: int) -> list[dict[str, Any]]:
+def _trace_reply_chain(message: dict[str, Any], messenger: Messenger) -> list[dict[str, Any]]:
     chain = [message]
     seen = {message.get("message_id")}
     parent_id = message.get("parent_id")
-    while parent_id and len(chain) < limit and parent_id not in seen:
+    while parent_id and parent_id not in seen:
         parent = messenger.get_message(parent_id)
         if not parent:
             break
@@ -212,6 +182,76 @@ def _trace_reply_chain(message: dict[str, Any], messenger: Messenger, limit: int
     return chain
 
 
+def _group_thread_context(message: dict[str, Any], messenger: Messenger, config: Config) -> list[dict[str, Any]]:
+    limit = int(config.get("prompt.group_thread_context_limit", 100))
+    if limit <= 0:
+        return [message]
+    messages = [
+        normalize_message(item)
+        for item in messenger.list_messages(
+            "thread",
+            message["thread_id"],
+            limit=limit,
+            sort_type="ByCreateTimeDesc",
+        )
+    ]
+    if not any(item.get("message_id") == message.get("message_id") for item in messages):
+        messages.append(message)
+    messages.sort(key=lambda item: int(item.get("create_time") or 0))
+    return messages[-limit:]
+
+
+def _merge_messages(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        for item in group:
+            key = str(item.get("message_id") or "")
+            if key:
+                merged[key] = item
+    return sorted(merged.values(), key=lambda item: int(item.get("create_time") or 0))
+
+
+def _without_message(messages: list[dict[str, Any]], message_id: Any) -> list[dict[str, Any]]:
+    return [item for item in messages if item.get("message_id") != message_id]
+
+
+def _append_attachment_references(
+    user_input: str,
+    attachments: list[dict[str, str]],
+    *,
+    message_ids: set[str],
+) -> str:
+    references = [
+        f"@{item['path']}"
+        for item in attachments
+        if item.get("path") and item.get("message_id") in message_ids and f"@{item['path']}" not in user_input
+    ]
+    if not references:
+        return user_input
+    prefix = "\n\n" if user_input else ""
+    return f"{user_input}{prefix}" + "\n".join(references)
+
+
+def _cached_resource_path(destination: Path) -> Path | None:
+    if destination.is_file():
+        return destination
+    candidates = sorted(destination.parent.glob("resource_*"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates and candidates[0].is_file() else None
+
+
+def _cleanup_download_cache(download_dir: Path, retention_days: int) -> None:
+    if retention_days <= 0 or not download_dir.exists():
+        return
+    cutoff = time.time() - retention_days * 24 * 60 * 60
+    for path in download_dir.iterdir():
+        if not path.is_dir() or path.stat().st_mtime >= cutoff:
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            logger.warning("清理过期附件缓存失败：路径=%s 错误=%s", path, exc)
+
+
 def _download_attachments(
     messages: list[dict[str, Any]],
     messenger: Messenger,
@@ -220,6 +260,7 @@ def _download_attachments(
     attached: list[dict[str, str]] = []
     references: dict[str, dict[str, str]] = {}
     download_dir = config.resolve_path("prompt.download_dir")
+    _cleanup_download_cache(download_dir, int(config.get("prompt.download_retention_days", 7)))
     for message in messages:
         message_id = str(message.get("message_id") or "")
         if not message_id:
@@ -230,9 +271,18 @@ def _download_attachments(
             if key in per_message:
                 continue
             safe_name = _safe_filename(file_item.get("name") or key)
-            destination = download_dir / message_id / f"{index:02d}_{safe_name}"
+            cache_key = sha256(f"{message_id}:{key}:{file_item['type']}".encode("utf-8")).hexdigest()[:24]
+            destination = download_dir / cache_key / f"resource_{index:02d}_{safe_name}"
             try:
-                path = messenger.download_message_resource(message_id, key, file_item["type"], destination)
+                path = _cached_resource_path(destination) or messenger.download_message_resource(
+                    message_id,
+                    key,
+                    file_item["type"],
+                    destination,
+                )
+                if path.exists():
+                    path.touch()
+                    path.parent.touch()
             except FeishuApiError as exc:
                 logger.warning("下载消息资源失败：消息=%s 文件=%s 错误=%s", message_id, key, exc)
                 attached.append(
@@ -245,7 +295,7 @@ def _download_attachments(
                         "note": f"download failed: {exc}",
                     }
                 )
-                per_message[key] = f"[资源下载失败：{key}]"
+                per_message[key] = "[附件下载失败]"
                 continue
             reference = f"@{path}"
             per_message[key] = reference
@@ -313,7 +363,7 @@ def _render_media_content(content: dict[str, Any], references: dict[str, str]) -
     for key in ("file_key", "image_key"):
         resource_key = content.get(key)
         if isinstance(resource_key, str) and resource_key:
-            parts.append(references.get(resource_key, f"[资源：{resource_key}]"))
+            parts.append(references.get(resource_key, "[附件不可用]"))
     return "\n".join(dict.fromkeys(parts))
 
 
@@ -328,12 +378,11 @@ def _render_node(node: Any, references: dict[str, str]) -> str:
         href = str(node.get("href") or "")
         return f"[{text}]({href})" if href else text
     if tag == "at":
-        user_id = str(node.get("user_id") or "")
-        name = str(node.get("user_name") or user_id or "@user")
-        return f"<at user_id=\"{user_id}\">{name}</at>"
+        name = str(node.get("user_name") or "@成员")
+        return f"@{name.lstrip('@')}"
     if tag == "img":
         image_key = str(node.get("image_key") or "")
-        return references.get(image_key, f"[图片：{image_key}]")
+        return references.get(image_key, "[附件不可用]")
     if tag in {"media", "file", "audio"}:
         return _render_media_content(node, references)
     if tag == "emotion":
@@ -346,8 +395,8 @@ def _render_node(node: Any, references: dict[str, str]) -> str:
     if tag == "hr":
         return "\n---\n"
     if tag:
-        return f"[飞书标签 {tag}：{json.dumps(node, ensure_ascii=False, sort_keys=True)}]"
-    return json.dumps(node, ensure_ascii=False, sort_keys=True)
+        return f"[飞书组件：{tag}]"
+    return ""
 
 
 def _render_structured_content(content: dict[str, Any], references: dict[str, str]) -> str:
@@ -360,7 +409,7 @@ def _render_structured_content(content: dict[str, Any], references: dict[str, st
             lines.append(rendered)
     if lines:
         return "\n".join(dict.fromkeys(lines))
-    return json.dumps(content, ensure_ascii=False, sort_keys=True)
+    return "（富消息）"
 
 
 def _replace_resource_keys(text: str, references: dict[str, str]) -> str:
@@ -371,21 +420,9 @@ def _replace_resource_keys(text: str, references: dict[str, str]) -> str:
 
 def _history_line(message: dict[str, Any], references: dict[str, dict[str, str]]) -> str:
     ts = _format_time(message.get("create_time"))
-    role = "assistant" if message.get("sender_type") in {"bot", "app"} else "user"
     text = extract_text(message, resource_references=references).strip()
-    return f"[{ts}][{role}]: {text or '（无文本内容）'}"
-
-
-def _source_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "message_id": message.get("message_id"),
-            "message_type": message.get("message_type"),
-            "content": _loads_content(message.get("content")),
-            "mentions": message.get("mentions") if isinstance(message.get("mentions"), list) else [],
-        }
-        for message in messages
-    ]
+    sender_id = message.get("sender_id") or "unknown"
+    return f"[{ts}][{sender_id}]: {text or '（无文本内容）'}"
 
 
 def _format_time(value: Any) -> str:

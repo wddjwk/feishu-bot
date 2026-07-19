@@ -6,7 +6,9 @@ import cards
 class CardTests(unittest.TestCase):
     def setUp(self):
         cards.configure_card_width("half")
+        cards.configure_tool_icons({"codebuddy": "🐇"})
         self.addCleanup(cards.configure_card_width, "half")
+        self.addCleanup(cards.configure_tool_icons, {})
 
     def test_ai_card_uses_tool_emojis_and_thinking_count(self):
         card = cards.build_ai_card("codebuddy", "deepseek-v4-flash", "OK", "abc\n测试")

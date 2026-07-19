@@ -84,7 +84,7 @@ Create this file in the project root before scheduling the deferred restart:
 }
 ```
 
-Use the current Feishu sender/open_id when the prompt context provides it. If no reliable recipient is available, omit `receive_id`; the server may fall back to the configured maintainer if available.
+Use the current Feishu sender/open_id when the prompt context provides it. If no reliable recipient is available, omit `receive_id`; no maintainer fallback is configured.
 
 Keep the message short because it will be sent as a restart-complete card after the new process starts.
 

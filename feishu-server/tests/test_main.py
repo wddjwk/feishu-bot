@@ -35,9 +35,7 @@ class StartupNotificationTests(unittest.TestCase):
             pending = Path(tmp) / "pending_restart.json"
             pending.write_text(json.dumps({"receive_id": "ou_user", "reply_text": "更新完成"}), encoding="utf-8")
             messenger = FakeMessenger()
-            with patch.object(main, "PENDING_RESTART_PATH", pending), patch.object(
-                main, "resolve_maintainer_open_id", return_value="ou_admin"
-            ), patch.object(main.threading, "Timer", ImmediateTimer):
+            with patch.object(main, "PENDING_RESTART_PATH", pending), patch.object(main.threading, "Timer", ImmediateTimer):
                 main.send_startup_notifications(FakeConfig(), messenger)
 
         self.assertEqual(len(messenger.sent), 1)

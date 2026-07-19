@@ -59,6 +59,7 @@ class ToolSpec:
     resume_args: tuple[str, ...]
     prompt_transport: str
     output_parser: str
+    env: tuple[tuple[str, str], ...]
 
     @classmethod
     def from_config(cls, name: str, config: Config) -> "ToolSpec":
@@ -81,7 +82,11 @@ class ToolSpec:
         output_parser = str(parser)
         if output_parser not in {"stream_json", "copilot_json"}:
             raise ConfigError(f"AI 工具 {name} 使用了不支持的 output_parser：{output_parser}")
-        return cls(name, command, base_args, session_args, resume_args, prompt_transport, output_parser)
+        model_environment = getattr(config, "model_environment", None)
+        env = model_environment(name) if callable(model_environment) else {}
+        if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
+            raise ConfigError(f"AI 工具 {name} 的模型环境变量无效")
+        return cls(name, command, base_args, session_args, resume_args, prompt_transport, output_parser, tuple(sorted(env.items())))
 
     def build_command(self, model: str, session_id: str | None, resume_session_id: str | None) -> list[str]:
         values = {"model": model, "session_id": resume_session_id or session_id or ""}
@@ -236,19 +241,8 @@ class AIRunner:
 
         workspace = self.config.resolve_path("ai.workspace")
         workspace.mkdir(parents=True, exist_ok=True)
-        logger.info(
-            "准备执行 AI：消息=%s CLI=%s 模型=%s 会话=%s 续接=%s 输入方式=%s 输出解析=%s 超时=%ss 工作目录=%s",
-            message_id,
-            selected_tool,
-            selected_model,
-            session_id or "（自动）",
-            resume_session_id or "否",
-            spec.prompt_transport,
-            spec.output_parser,
-            timeout,
-            workspace,
-        )
-        logger.info("AI 执行命令：%s", shlex.join(command))
+        command_for_log = command[:-1] if spec.prompt_transport == "argument" else command
+        logger.info("AI 命令：CLI=%s 模型=%s 会话=%s 命令=%s", selected_tool, selected_model, resume_session_id or session_id or "（新会话）", shlex.join(command_for_log))
         logger.info("AI 完整提示词：\n%s", prompt_text or "（空）")
         started_at = time.monotonic()
         try:
@@ -260,6 +254,7 @@ class AIRunner:
                 stderr=subprocess.PIPE,
                 text=True,
                 preexec_fn=os.setsid,
+                env={**os.environ, **dict(spec.env)},
             )
         except FileNotFoundError:
             error = f"找不到 AI 命令：{command[0]}"
@@ -271,7 +266,6 @@ class AIRunner:
             return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
 
         self.registry.register(message_id, process, tool=selected_tool, model=selected_model)
-        logger.info("AI 进程已启动：消息=%s PID=%s", message_id, process.pid)
         try:
             stdout, stderr = process.communicate(input=prompt_text if spec.prompt_transport == "stdin" else None, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -305,18 +299,6 @@ class AIRunner:
         if process.returncode != 0 and not parsed.result:
             parsed.ok = False
             parsed.error = stderr.strip() or f"AI 进程退出码异常：{process.returncode}"
-        elapsed = time.monotonic() - started_at
-        logger.info(
-            "AI 执行结束：消息=%s PID=%s 退出码=%s 成功=%s 耗时=%.2fs 会话=%s 回复字符=%s 思考字符=%s",
-            message_id,
-            process.pid,
-            process.returncode,
-            parsed.ok,
-            elapsed,
-            parsed.session_id or "（无）",
-            len(parsed.result),
-            len(parsed.thinking),
-        )
         return parsed
 
     def _build_command(
@@ -330,8 +312,7 @@ class AIRunner:
 
     @staticmethod
     def _log_process_output(stdout: str, stderr: str) -> None:
-        logger.info("AI 原始标准输出（完整）：\n%s", stdout or "（空）")
-        logger.info("AI 原始错误输出（完整）：\n%s", stderr or "（空）")
+        logger.info("AI 原始输出（完整）：\n[stdout]\n%s\n[stderr]\n%s", stdout or "（空）", stderr or "（空）")
 
     @staticmethod
     def _kill_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:

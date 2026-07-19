@@ -1,0 +1,49 @@
+{
+  "default_cli": "codebuddy",
+  "tools": {
+    "qoder": {
+      "default_model": "DeepSeek-V4-Flash",
+      "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4"],
+      "aliases": {
+        "default": "DeepSeek-V4-Flash",
+        "max": "DeepSeek-V4",
+        "middle": "DeepSeek-V4-Flash",
+        "min": "DeepSeek-V4-Flash"
+      },
+      "env": {}
+    },
+    "claude": {
+      "default_model": "deepseek-v4-flash",
+      "model_list": ["deepseek-v4-flash", "deepseek-v4"],
+      "aliases": {
+        "default": "deepseek-v4-flash",
+        "max": "deepseek-v4",
+        "middle": "deepseek-v4-flash",
+        "min": "deepseek-v4-flash"
+      },
+      "env": {}
+    },
+    "copilot": {
+      "default_model": "claude-sonnet-4.6",
+      "model_list": ["claude-haiku-4.5", "claude-sonnet-4.6", "claude-opus-4.7"],
+      "aliases": {
+        "default": "claude-sonnet-4.6",
+        "max": "claude-opus-4.7",
+        "middle": "claude-sonnet-4.6",
+        "min": "claude-haiku-4.5"
+      },
+      "env": {}
+    },
+    "codebuddy": {
+      "default_model": "deepseek-v4-pro",
+      "model_list": ["deepseek-v4-flash", "deepseek-v4-pro"],
+      "aliases": {
+        "default": "deepseek-v4-pro",
+        "max": "deepseek-v4-pro",
+        "middle": "deepseek-v4-flash",
+        "min": "deepseek-v4-flash"
+      },
+      "env": {}
+    }
+  }
+}

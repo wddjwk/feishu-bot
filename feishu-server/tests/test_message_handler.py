@@ -19,8 +19,7 @@ class FakeConfig:
     def get(self, dotted: str, default=None):
         values = {
             "feishu.reaction_processing": "OnIt",
-            "prompt.reply_chain_limit": 20,
-            "prompt.thread_message_limit": 50,
+            "prompt.group_thread_context_limit": 100,
         }
         return values.get(dotted, default)
 
@@ -253,9 +252,8 @@ class MessageHandlerFlowTests(unittest.TestCase):
             handler.handle_event(event)
 
         self.assertEqual(len(runner.calls), 1)
-        attached = runner.calls[0]["prompt"]["context"]["attached_files"]
-        self.assertEqual(attached[0]["key"], "file-key")
-        self.assertIn("@", "\n".join(runner.calls[0]["prompt"]["context"]["conversation_history"]))
+        self.assertIn("@", runner.calls[0]["prompt"])
+        self.assertIn("请分析这个文件", runner.calls[0]["prompt"])
 
     def test_group_reply_to_file_requires_and_honors_bot_mention(self):
         messenger = FakeMessenger()
@@ -283,7 +281,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
             handler.handle_event(event)
 
         self.assertEqual(len(runner.calls), 1)
-        self.assertEqual(runner.calls[0]["prompt"]["context"]["attached_files"][0]["key"], "file-key")
+        self.assertIn("@", runner.calls[0]["prompt"])
 
     def test_generated_file_is_sent_before_completion_card(self):
         class FileRunner(FakeRunner):

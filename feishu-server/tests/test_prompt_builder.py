@@ -1,8 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from services.messenger import FeishuApiError
 from services.prompt_builder import (
     build_prompt,
     extract_files,
@@ -18,8 +21,7 @@ class FakeConfig:
 
     def get(self, dotted: str, default=None):
         values = {
-            "prompt.reply_chain_limit": 20,
-            "prompt.thread_message_limit": 50,
+            "prompt.group_thread_context_limit": 50,
         }
         return values.get(dotted, default)
 
@@ -78,7 +80,7 @@ class PromptBuilderTests(unittest.TestCase):
 
         self.assertIn("[链接](https://example.test)", text)
         self.assertIn("[文档](https://docs.example.test)", text)
-        self.assertIn("<at user_id=\"ou_user\">用户</at>", text)
+        self.assertIn("@用户", text)
         self.assertIn("```python\nprint('ok')\n```", text)
         self.assertIn("@/tmp/image.png", text)
         self.assertIn("@/tmp/video.mp4", text)
@@ -104,9 +106,28 @@ class PromptBuilderTests(unittest.TestCase):
             result = build_prompt(message, messenger, config)
 
         self.assertEqual(result.attached_files[0]["key"], "img_v3_markdown_only")
-        self.assertIn("@", result.prompt["user_input"])
+        self.assertIn("@", result.prompt)
 
-    def test_build_prompt_downloads_rich_resources_and_keeps_raw_content(self):
+    def test_failed_attachment_download_hides_resource_key_from_prompt(self):
+        class FailingMessenger(FakeMessenger):
+            def download_message_resource(self, *_args, **_kwargs):
+                raise FeishuApiError("download failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            messenger = FailingMessenger()
+            config = FakeConfig(Path(tmp))
+            message = {
+                "message_id": "m-failed-image",
+                "message_type": "image",
+                "content": json.dumps({"image_key": "img_server_resource"}),
+            }
+
+            result = build_prompt(message, messenger, config)
+
+        self.assertIn("[附件下载失败]", result.prompt)
+        self.assertNotIn("img_server_resource", result.prompt)
+
+    def test_build_prompt_downloads_rich_resources_without_server_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             messenger = FakeMessenger()
             config = FakeConfig(Path(tmp))
@@ -128,9 +149,10 @@ class PromptBuilderTests(unittest.TestCase):
             result = build_prompt(message, messenger, config)
 
         self.assertEqual({item["key"] for item in result.attached_files}, {"img-key", "file-key", "cover-key"})
-        self.assertIn("@", result.prompt["user_input"])
-        raw = result.prompt["context"]["source_messages"][0]["content"]
-        self.assertEqual(raw["zh_cn"]["content"][0][0]["image_key"], "img-key")
+        self.assertIn("@", result.prompt)
+        self.assertIn("用户输入：", result.prompt)
+        self.assertNotIn("message_id", result.prompt)
+        self.assertNotIn("source_messages", result.prompt)
 
     def test_reply_to_file_downloads_parent_file_but_standalone_file_is_identified(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,8 +175,9 @@ class PromptBuilderTests(unittest.TestCase):
 
         self.assertTrue(is_standalone_file_message(standalone))
         self.assertFalse(is_standalone_file_message(reply))
-        self.assertEqual(result.attached_files[0]["name"], "01_report.pdf")
-        self.assertIn("@", "\n".join(result.prompt["context"]["conversation_history"]))
+        self.assertEqual(result.attached_files[0]["name"], "resource_01_report.pdf")
+        self.assertIn("@", result.prompt)
+        self.assertIn("上下文：", result.prompt)
 
     def test_extract_files_handles_direct_audio_and_video(self):
         audio = normalize_message(
@@ -181,18 +204,20 @@ class PromptBuilderTests(unittest.TestCase):
             ],
         )
 
-    def test_thread_context_keeps_current_message_when_history_is_full(self):
+    def test_group_thread_context_keeps_current_message_and_non_bot_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = FakeConfig(Path(tmp))
 
             class ThreadMessenger(FakeMessenger):
                 def list_messages(self, *_args, **_kwargs):
+                    self.list_kwargs = _kwargs
                     return [
                         {
                             "message_id": f"old-{index}",
                             "message_type": "text",
                             "content": json.dumps({"text": f"old {index}"}),
                             "create_time": str(index),
+                            "sender": {"id": f"ou_old_{index}"},
                         }
                         for index in range(50)
                     ]
@@ -202,15 +227,98 @@ class PromptBuilderTests(unittest.TestCase):
                 "message_id": "current",
                 "message_type": "image",
                 "thread_id": "thread-1",
+                "chat_type": "group",
+                "sender_id": "ou_current",
                 "content": json.dumps({"image_key": "current-image"}),
                 "create_time": "999",
             }
 
             result = build_prompt(message, messenger, config)
 
-        self.assertEqual(result.prompt["context"]["source_messages"][-1]["message_id"], "current")
         self.assertEqual(result.attached_files[-1]["key"], "current-image")
-        self.assertIn("@", result.prompt["user_input"])
+        self.assertIn("@", result.prompt)
+        self.assertIn("[", result.prompt)
+        self.assertIn("[ou_old_1]: old 1", result.prompt)
+        self.assertNotIn("current-image", result.prompt.split("上下文：", maxsplit=1)[1])
+        self.assertEqual(messenger.list_kwargs["sort_type"], "ByCreateTimeDesc")
+
+    def test_private_topic_keeps_replied_file_reference_without_repeating_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            messenger = FakeMessenger()
+            config = FakeConfig(Path(tmp))
+            messenger.messages["file-parent"] = {
+                "message_id": "file-parent",
+                "message_type": "file",
+                "content": json.dumps({"file_key": "file-key", "file_name": "notes.txt"}),
+                "create_time": "1",
+                "sender": {"id": "ou_other"},
+            }
+            message = {
+                "message_id": "topic-current",
+                "message_type": "text",
+                "thread_id": "thread-1",
+                "chat_type": "p2p",
+                "parent_id": "file-parent",
+                "sender_id": "ou_user",
+                "content": json.dumps({"text": "继续"}),
+            }
+
+            result = build_prompt(message, messenger, config)
+
+        self.assertIn("用户 ID：ou_user", result.prompt)
+        self.assertIn("@", result.prompt)
+        self.assertNotIn("上下文：", result.prompt)
+
+    def test_prompt_never_contains_server_message_ids_or_raw_unknown_nodes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            messenger = FakeMessenger()
+            config = FakeConfig(Path(tmp))
+            message = {
+                "message_id": "om_server_id",
+                "message_type": "post",
+                "sender_id": "ou_sender",
+                "content": json.dumps(
+                    {
+                        "zh_cn": {
+                            "content": [
+                                [{"tag": "at", "user_id": "ou_hidden", "user_name": "张三"}],
+                                [{"tag": "unsupported", "sensitive_id": "om_hidden"}],
+                            ]
+                        }
+                    }
+                ),
+            }
+
+            result = build_prompt(message, messenger, config)
+
+        self.assertIn("@张三", result.prompt)
+        self.assertIn("[飞书组件：unsupported]", result.prompt)
+        self.assertNotIn("om_server_id", result.prompt)
+        self.assertNotIn("om_hidden", result.prompt)
+        self.assertNotIn("ou_hidden", result.prompt)
+
+    def test_attachment_cache_reuses_opaque_path_without_message_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            messenger = FakeMessenger()
+            config = FakeConfig(Path(tmp))
+            message = {
+                "message_id": "om_server_id",
+                "message_type": "image",
+                "content": json.dumps({"image_key": "img_key"}),
+            }
+
+            first = build_prompt(message, messenger, config)
+            cache_dir = messenger.downloaded[0]["path"].parent
+            os.utime(cache_dir, (0, 0))
+            with patch("services.prompt_builder._cleanup_download_cache"):
+                second = build_prompt(message, messenger, config)
+            cache_was_refreshed = cache_dir.stat().st_mtime > 0
+
+        self.assertEqual(len(messenger.downloaded), 1)
+        self.assertIn("@", first.prompt)
+        self.assertEqual(first.prompt, second.prompt)
+        self.assertNotIn("om_server_id", first.prompt)
+        self.assertTrue(cache_was_refreshed)
 
 
 if __name__ == "__main__":

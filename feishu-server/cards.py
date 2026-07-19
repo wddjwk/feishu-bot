@@ -3,18 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-TOOL_ICONS = {
-    "qoder": "🖥️",
-    "claude": "🧠",
-    "copilot": "🤖",
-    "codebuddy": "🐇",
-}
-
 MAX_SECTION_CHARS = 100_000
 MARKDOWN_CHUNK_CHARS = 18_000
 PLAIN_TEXT_CHUNK_CHARS = 9_000
 CARD_WIDTHS = {"half", "full"}
 _card_width = "half"
+_tool_icons: dict[str, str] = {}
 
 
 def configure_card_width(width: str) -> None:
@@ -23,6 +17,13 @@ def configure_card_width(width: str) -> None:
         raise ValueError(f"feishu.card_width 必须为以下值之一：{', '.join(sorted(CARD_WIDTHS))}")
     global _card_width
     _card_width = normalized
+
+
+def configure_tool_icons(icons: dict[str, Any]) -> None:
+    if not all(isinstance(tool, str) and isinstance(icon, str) and icon for tool, icon in icons.items()):
+        raise ValueError("feishu.tool_icons 必须是 CLI 名称到非空图标字符串的映射")
+    global _tool_icons
+    _tool_icons = dict(icons)
 
 
 def _limit_text(text: str, max_chars: int) -> str:
@@ -127,7 +128,7 @@ def plain_text_elements(content: str, *, text_color: str = "default") -> list[di
 
 def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dict[str, Any]:
     display_tool = tool.capitalize()
-    title = f"{TOOL_ICONS.get(tool, '🤖')}{display_tool} {model}"
+    title = f"{_tool_icons.get(tool, '🤖')}{display_tool} {model}"
     elements = markdown_elements(result)
     thinking_text = thinking.strip()
     if thinking_text:
@@ -191,18 +192,21 @@ def build_timer_list_card(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_running_tasks_card(items: list[dict[str, Any]]) -> dict[str, Any]:
-    elements: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
-        lines = [
-            f"**{item.get('tool', '')} / {item.get('model', '')}**",
-            f"ID：`{item.get('message_id', '')}`",
-            f"PID：`{item.get('pid', '')}`",
-            f"运行：{item.get('elapsed_seconds', 0)}s",
-        ]
-        elements.extend(markdown_elements("\n".join(lines)))
-        if index != len(items) - 1:
-            elements.append({"tag": "hr"})
-    return _base_card("运行中的 AI 分析", "blue", elements, summary=f"共 {len(items)} 个运行中任务")
+    lines = [
+        "| ID | CLI / 模型 | PID | 已运行 |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    for item in items:
+        lines.append(
+            "| `{id}` | `{tool}` / `{model}` | {pid} | {elapsed}s |".format(
+                id=item.get("message_id", ""),
+                tool=item.get("tool", ""),
+                model=item.get("model", ""),
+                pid=item.get("pid", ""),
+                elapsed=item.get("elapsed_seconds", 0),
+            )
+        )
+    return _base_card("运行中的 AI 分析", "blue", markdown_elements("\n".join(lines)), summary=f"共 {len(items)} 个运行中任务")
 
 
 def build_help_card(commands: list[tuple[str, str]]) -> dict[str, Any]:

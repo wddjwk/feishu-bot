@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 STORE_VERSION = 2
 LINK_RETENTION_PRIORITY = {
     "user_message": 0,
-    "legacy": 0,
     "bot_reply": 1,
     "bot_file": 1,
     "thread": 2,
@@ -29,15 +28,14 @@ class SessionStoreError(RuntimeError):
 class SessionStore:
     def __init__(self, config: Config) -> None:
         self.path = config.resolve_path("session_store.path")
-        legacy_max_entries = int(config.get("session_store.max_entries", 500))
-        self.max_links = self._config_int(config, "session_store.max_links", legacy_max_entries, minimum=0)
+        self.max_links = self._config_int(config, "session_store.max_links", 500, minimum=0)
         self.retention_days = self._config_int(config, "session_store.retention_days", 90, minimum=0)
         self.cleanup_interval_seconds = self._config_int(config, "session_store.cleanup_interval_seconds", 3600, minimum=1)
         self._lock = threading.RLock()
         self._next_cleanup_at = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.cleanup(force=True)
-        logger.info(
+        logger.debug(
             "会话存储已初始化：JSON 文件=%s 关联上限=%s",
             self.path,
             self.max_links,
@@ -47,9 +45,8 @@ class SessionStore:
         if not key:
             return None
         with self._lock:
-            data, migrated = self._load_locked()
-            if migrated:
-                self._backup_legacy_locked()
+            data, reset = self._load_locked()
+            if reset:
                 self._write_locked(data)
             return self._entry_for_key(data, key)
 
@@ -67,9 +64,7 @@ class SessionStore:
             raise ValueError("会话关联必须包含键、会话 ID、CLI 和模型")
         now = int(time.time())
         with self._lock:
-            data, migrated = self._load_locked()
-            if migrated:
-                self._backup_legacy_locked()
+            data, _reset = self._load_locked()
             sessions = data["sessions"]
             links = data["links"]
             existing_session = sessions.get(session_id)
@@ -96,7 +91,7 @@ class SessionStore:
                 self._cleanup_data(data, now)
                 self._next_cleanup_at = time.monotonic() + self.cleanup_interval_seconds
             self._write_locked(data)
-        logger.info("已保存会话关联：键=%s 类型=%s 会话=%s CLI=%s 模型=%s", key, link_type, session_id, tool, model)
+        logger.debug("已保存会话关联：键=%s 类型=%s 会话=%s", key, link_type, session_id)
 
     def resolve_for_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         for key in (message.get("thread_id"), message.get("root_id"), message.get("parent_id")):
@@ -118,9 +113,8 @@ class SessionStore:
         if not session_id:
             return []
         with self._lock:
-            data, migrated = self._load_locked()
-            if migrated:
-                self._backup_legacy_locked()
+            data, reset = self._load_locked()
+            if reset:
                 self._write_locked(data)
             entries = [
                 entry
@@ -131,9 +125,8 @@ class SessionStore:
 
     def stats(self) -> dict[str, int | None]:
         with self._lock:
-            data, migrated = self._load_locked()
-            if migrated:
-                self._backup_legacy_locked()
+            data, reset = self._load_locked()
+            if reset:
                 self._write_locked(data)
             sessions = data["sessions"]
             updated_at = [
@@ -153,12 +146,10 @@ class SessionStore:
             now_monotonic = time.monotonic()
             if not force and now_monotonic < self._next_cleanup_at:
                 return {"sessions": 0, "links": 0}
-            data, migrated = self._load_locked()
+            data, reset = self._load_locked()
             removed = self._cleanup_data(data, int(time.time()))
             self._next_cleanup_at = now_monotonic + self.cleanup_interval_seconds
-            if migrated:
-                self._backup_legacy_locked()
-            if migrated or removed["sessions"] or removed["links"] or not self.path.exists():
+            if reset or removed["sessions"] or removed["links"] or not self.path.exists():
                 self._write_locked(data)
         if removed["sessions"] or removed["links"]:
             logger.info("已清理过期会话数据：会话=%s 关联=%s", removed["sessions"], removed["links"])
@@ -186,42 +177,8 @@ class SessionStore:
             if not all(isinstance(key, str) and isinstance(link, dict) for key, link in links.items()):
                 raise SessionStoreError("会话存储 links 格式无效")
             return {"version": STORE_VERSION, "sessions": sessions, "links": links}, False
-
-        entries = raw.get("entries")
-        if not isinstance(entries, list):
-            raise SessionStoreError("不支持的会话存储格式")
-        data = self._empty_data()
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            key = str(entry.get("key") or "").strip()
-            session_id = str(entry.get("session_id") or "").strip()
-            tool = str(entry.get("tool") or "").strip()
-            model = str(entry.get("model") or "").strip()
-            if not key or not session_id or not tool or not model:
-                logger.warning("跳过不完整的旧会话映射：%s", entry.get("key"))
-                continue
-            created_at = self._timestamp(entry.get("created_at"))
-            updated_at = self._timestamp(entry.get("updated_at"), fallback=created_at)
-            session = data["sessions"].get(session_id)
-            if not session:
-                data["sessions"][session_id] = {
-                    "tool": tool,
-                    "model": model,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                }
-            else:
-                session["updated_at"] = max(self._timestamp(session.get("updated_at")), updated_at)
-            data["links"][key] = {
-                "session_id": session_id,
-                "link_type": "legacy",
-                "metadata": entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {},
-                "created_at": created_at,
-                "updated_at": updated_at,
-            }
-        logger.info("已将旧版平铺会话映射转换为版本 %s 的 JSON 索引", STORE_VERSION)
-        return data, True
+        logger.warning("会话映射不是当前版本，将重置为空索引：%s", self.path)
+        return self._empty_data(), True
 
     @staticmethod
     def _empty_data() -> dict[str, Any]:
@@ -314,17 +271,6 @@ class SessionStore:
         with temporary_path.open("w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2, sort_keys=True)
         temporary_path.replace(self.path)
-
-    def _backup_legacy_locked(self) -> None:
-        backup_path = self.path.with_suffix(self.path.suffix + ".v1.bak")
-        if backup_path.exists() or not self.path.exists():
-            return
-        try:
-            backup_path.write_bytes(self.path.read_bytes())
-        except OSError as exc:
-            logger.warning("无法备份旧会话映射文件 %s：%s", self.path, exc)
-            return
-        logger.info("已备份旧版平铺会话映射：%s", backup_path)
 
     @staticmethod
     def _config_int(config: Config, dotted: str, default: int, *, minimum: int) -> int:

@@ -58,8 +58,6 @@ def setup_logging(config: Config) -> None:
 
 
 def send_startup_notifications(config: Config, messenger: Messenger) -> None:
-    logger = logging.getLogger(__name__)
-    maintainer = resolve_maintainer_open_id(config, messenger)
     pending_data: dict[str, str] = {}
     if PENDING_RESTART_PATH.exists():
         try:
@@ -70,10 +68,9 @@ def send_startup_notifications(config: Config, messenger: Messenger) -> None:
             pending_data = {}
         PENDING_RESTART_PATH.unlink(missing_ok=True)
 
-    receive_id = pending_data.get("receive_id") or maintainer
+    receive_id = pending_data.get("receive_id")
     receive_id_type = pending_data.get("receive_id_type") or "open_id"
     if not receive_id:
-        logger.warning("未发送启动通知：未配置或无法解析维护者 open_id")
         return
 
     lines = [f"服务器已启动。", "", f"当前版本：`{config.version()}`"]
@@ -81,21 +78,6 @@ def send_startup_notifications(config: Config, messenger: Messenger) -> None:
         lines.extend(["", pending_data["reply_text"]])
     card = cards.build_generic_card("FeishuBot 已启动", "\n".join(lines), "green")
     threading.Timer(3.0, lambda: _safe_send_card(messenger, receive_id, receive_id_type, card)).start()
-
-
-def resolve_maintainer_open_id(config: Config, messenger: Messenger) -> str:
-    open_id = os.getenv("FEISHU_MAINTAINER_OPEN_ID", "").strip()
-    if _looks_like_open_id(open_id):
-        return open_id
-    name = os.getenv("FEISHU_MAINTAINER_NAME", "").strip() or str(config.get("feishu.maintainer_name", "")).strip()
-    if not name:
-        return ""
-    try:
-        resolved = messenger.find_user_open_id_by_name(name)
-    except FeishuApiError as exc:
-        logging.getLogger(__name__).warning("无法通过姓名解析维护者 open_id：姓名=%s 错误=%s", name, exc)
-        return ""
-    return resolved or ""
 
 
 def _looks_like_open_id(value: str) -> bool:
@@ -116,6 +98,7 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     try:
         cards.configure_card_width(str(config.get("feishu.card_width", "half")))
+        cards.configure_tool_icons(config.get("feishu.tool_icons", {}))
     except ValueError as exc:
         logger.error("卡片宽度配置无效：%s", exc)
         raise SystemExit(2) from exc
