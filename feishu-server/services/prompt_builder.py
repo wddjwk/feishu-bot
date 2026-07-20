@@ -97,12 +97,14 @@ def build_prompt(
     else:
         context_messages = []
 
-    prompt = {
+    prompt: dict[str, Any] = {
         "workfolder": _relative_workfolder(work_dir),
         "user_id": str(message.get("sender_id") or "unknown"),
         "user_input": user_input or "（无文本内容）",
         "context": [_history_line(item, references) for item in context_messages],
     }
+    if message.get("chat_type") == "group":
+        prompt["group_id"] = str(message.get("chat_id") or "")
     return PromptBuildResult(
         json.dumps(prompt, ensure_ascii=False, indent=2),
         work_dir=work_dir,

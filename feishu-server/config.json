@@ -1,5 +1,5 @@
 {
-  "version": "v1.0.0",
+  "version": "v2.0.2",
   "feishu": {
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
