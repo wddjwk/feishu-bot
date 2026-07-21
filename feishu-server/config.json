@@ -1,5 +1,5 @@
 {
-  "version": "v2.1.0",
+  "version": "v2.2.0",
   "feishu": {
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
@@ -16,6 +16,8 @@
     "timeout_seconds": 36000,
     "max_argument_prompt_bytes": 100000,
     "workspace": "../agent-workspace",
+    "auto_memory_resume": true,
+    "auto_memory_resume_timeout_seconds": 300,
     "tools": {
       "qoder": {
         "command": "qodercli",

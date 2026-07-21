@@ -21,6 +21,7 @@ class FakeConfig:
         values = {
             "feishu.reaction_processing": "OnIt",
             "prompt.group_thread_context_limit": 100,
+            "ai.auto_memory_resume": False,
         }
         return values.get(dotted, default)
 
@@ -90,7 +91,7 @@ class FakeRunner:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+    def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
         self.calls.append(
             {
                 "prompt": prompt,
@@ -99,6 +100,8 @@ class FakeRunner:
                 "model": model,
                 "session_id": session_id,
                 "resume_session_id": resume_session_id,
+                "timeout_seconds": timeout_seconds,
+                "register": register,
             }
         )
         return AIResult(
@@ -294,7 +297,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
                 super().__init__()
                 self.workspace = workspace
 
-            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
                 self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
                 path = self.workspace / json.loads(prompt)["workfolder"] / "report.txt"
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,7 +343,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
                 super().__init__()
                 self.workspace = workspace
 
-            def run(self, prompt, _message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+            def run(self, prompt, _message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
                 path = self.workspace / json.loads(prompt)["workfolder"] / "report.png"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"image")
@@ -371,7 +374,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
 
     def test_failed_new_run_does_not_create_resumable_mapping(self):
         class FailingRunner(FakeRunner):
-            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
                 self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
                 return AIResult(False, tool or "claude", model or "deepseek-v4-flash", error="启动失败", session_id=session_id)
 
@@ -399,7 +402,7 @@ class MessageHandlerFlowTests(unittest.TestCase):
             def supports_explicit_session(self, _tool=None):
                 return False
 
-            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
                 self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id})
                 return AIResult(True, tool or "claude", model or "deepseek-v4-flash", result="done", session_id="native-session")
 
@@ -527,7 +530,125 @@ class MessageHandlerFlowTests(unittest.TestCase):
         self.assertEqual(runner.calls, [])
         self.assertTrue(messenger.replies[0]["reply_in_thread"])
         self.assertEqual(messenger.replies[0]["card"]["header"]["title"]["content"], "⚠️ 话题会话未找到")
-        self.assertEqual(messenger.deleted_reactions, [{"message_id": "m-unmapped", "reaction_id": "reaction-1"}])
+        self.assertEqual(messenger.reactions, [])
+        self.assertEqual(messenger.deleted_reactions, [])
+
+
+class AutoMemoryResumeTests(unittest.TestCase):
+    def _config_with_resume(self):
+        config = FakeConfig()
+
+        class _Cfg(FakeConfig):
+            def get(self, dotted, default=None):
+                if dotted == "ai.auto_memory_resume":
+                    return True
+                if dotted == "ai.auto_memory_resume_timeout_seconds":
+                    return 120
+                return super().get(dotted, default)
+
+        return _Cfg()
+
+    def test_successful_new_session_triggers_auto_resume_with_non_topic_prompt(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        store = FakeSessionStore()
+        handler = MessageHandler(self._config_with_resume(), messenger, runner, store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-auto-1",
+                "message_type": "text",
+                "content": json.dumps({"text": "hello"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread), patch(
+            "handlers.message_handler.uuid4", return_value=UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        ):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 2)
+        main_call = runner.calls[0]
+        auto_call = runner.calls[1]
+        self.assertEqual(main_call["session_id"], "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        self.assertTrue(main_call["register"])
+        self.assertEqual(auto_call["resume_session_id"], "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        self.assertFalse(auto_call["register"])
+        self.assertEqual(auto_call["timeout_seconds"], 120)
+        self.assertIn("【来自系统的自动提示】", auto_call["prompt"])
+        self.assertIn("完成了一次用户的任务", auto_call["prompt"])
+        self.assertIn("宁缺毋滥", auto_call["prompt"])
+
+    def test_successful_topic_resume_triggers_auto_resume_with_topic_prompt(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        store = FakeSessionStore({"session_id": "topic-session", "tool": "qoder", "model": "DeepSeek-V4-Flash"})
+        handler = MessageHandler(self._config_with_resume(), messenger, runner, store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-auto-2",
+                "message_type": "text",
+                "content": json.dumps({"text": "more"}),
+                "thread_id": "thread-1",
+                "root_id": "bot-root",
+                "create_time": "3",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 2)
+        auto_call = runner.calls[1]
+        self.assertEqual(auto_call["resume_session_id"], "topic-session")
+        self.assertFalse(auto_call["register"])
+        self.assertIn("【来自系统的自动提示】", auto_call["prompt"])
+        self.assertIn("追问", auto_call["prompt"])
+
+    def test_failed_ai_call_does_not_trigger_auto_resume(self):
+        class FailingRunner(FakeRunner):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
+                self.calls.append({"prompt": prompt, "message_id": message_id})
+                return AIResult(False, tool or "claude", model or "deepseek-v4-flash", error="失败", session_id=session_id)
+
+        messenger = FakeMessenger()
+        runner = FailingRunner()
+        handler = MessageHandler(self._config_with_resume(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-auto-fail",
+                "message_type": "text",
+                "content": json.dumps({"text": "hi"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread), patch(
+            "handlers.message_handler.uuid4", return_value=UUID("11111111-2222-3333-4444-555555555555")
+        ):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_auto_memory_resume_disabled_does_not_trigger(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-auto-off",
+                "message_type": "text",
+                "content": json.dumps({"text": "hi"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread), patch(
+            "handlers.message_handler.uuid4", return_value=UUID("66666666-7777-8888-9999-aaaaaaaaaaaa")
+        ):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 1)
 
 
 if __name__ == "__main__":

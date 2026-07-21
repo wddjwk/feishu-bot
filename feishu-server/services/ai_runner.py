@@ -205,6 +205,7 @@ class AIRunner:
         session_id: str | None = None,
         resume_session_id: str | None = None,
         timeout_seconds: int | None = None,
+        register: bool = True,
     ) -> AIResult:
         try:
             selected_tool = tool or self.config.current_tool()
@@ -268,7 +269,8 @@ class AIRunner:
             logger.exception("%s", error)
             return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
 
-        self.registry.register(message_id, process, tool=selected_tool, model=selected_model)
+        if register:
+            self.registry.register(message_id, process, tool=selected_tool, model=selected_model)
         try:
             stdout, stderr = process.communicate(input=prompt_text if spec.prompt_transport == "stdin" else None, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -290,7 +292,8 @@ class AIRunner:
                 session_id=resume_session_id or session_id,
             )
         finally:
-            self.registry.unregister(message_id)
+            if register:
+                self.registry.unregister(message_id)
 
         parsed = parse_output(spec.output_parser, stdout, stderr)
         parsed.tool = selected_tool

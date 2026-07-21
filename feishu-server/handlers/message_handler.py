@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,8 @@ class MessageHandler(BaseHandler):
         self._bot_open_id = bot_open_id.strip()
         self._seen: deque[str] = deque(maxlen=1000)
         self._seen_set: set[str] = set()
+        self._session_locks: dict[str, threading.Lock] = {}
+        self._session_locks_guard = threading.Lock()
 
     def handle_event(self, event: dict[str, Any]) -> None:
         message = normalize_event(event)
@@ -85,13 +88,11 @@ class MessageHandler(BaseHandler):
             self._reply_card(message, command_response.card)
             return
 
-        reaction_id = self._add_processing_reaction(message_id)
         try:
             conversation = self._conversation_for(message)
         except ConfigError as exc:
             logger.exception("选择 AI 会话配置失败：消息=%s", message_id)
             self._reply_card(message, cards.build_error_card("会话配置错误", str(exc)))
-            self._delete_reaction(message_id, reaction_id)
             return
         if not conversation:
             self._reply_card(
@@ -101,7 +102,6 @@ class MessageHandler(BaseHandler):
                     "当前话题未关联到机器人回复，无法安全续接会话。请在机器人回复卡片下创建话题。",
                 ),
             )
-            self._delete_reaction(message_id, reaction_id)
             return
 
         try:
@@ -109,12 +109,11 @@ class MessageHandler(BaseHandler):
         except FeishuApiError as exc:
             logger.exception("构建 AI 提示词失败：消息=%s", message_id)
             self._reply_card(message, cards.build_error_card("上下文构建失败", str(exc)))
-            self._delete_reaction(message_id, reaction_id)
             return
 
         threading.Thread(
             target=self._run_ai_and_reply,
-            args=(message, prompt_result.prompt, prompt_result.work_dir, reaction_id, conversation),
+            args=(message, prompt_result.prompt, prompt_result.work_dir, conversation),
             name=f"ai-{message_id}",
             daemon=True,
         ).start()
@@ -124,40 +123,55 @@ class MessageHandler(BaseHandler):
         message: dict[str, Any],
         prompt: str,
         delivery_dir: Path,
-        reaction_id: str | None,
         conversation: Conversation,
     ) -> None:
         message_id = message["message_id"]
-        try:
-            result = self.ai_runner.run(
-                prompt,
-                message_id,
-                tool=conversation.tool,
-                model=conversation.model,
-                session_id=None if conversation.resume else conversation.session_id,
-                resume_session_id=conversation.session_id if conversation.resume else None,
-            )
-            if result.ok:
-                delivery = extract_file_deliveries(result.result, delivery_dir)
-                if delivery.paths:
-                    self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
-                    return
-                result_text = delivery.text
-                if delivery.errors:
-                    result_text = "\n".join([result_text, *[f"文件交付失败：{error}" for error in delivery.errors]]).strip()
-                card = cards.build_ai_card(result.tool, result.model, result_text or "任务已完成。", result.thinking)
-            else:
-                card = cards.build_error_card("AI 分析失败", result.error or "未能获取有效输出", result.stderr)
+        lock = self._get_session_lock(conversation.session_id) if conversation.session_id else nullcontext()
+        with lock:
+            reaction_id = self._add_processing_reaction(message_id)
+            result = None
             try:
-                reply = self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
-            except FeishuApiError:
-                logger.exception("发送 AI 回复卡片失败：消息=%s", message_id)
-                return
-            if result.ok and result.session_id:
-                self._save_session_mappings(message, reply, conversation, result.session_id)
-            logger.debug("AI 回复卡片已发送：请求消息=%s 回复消息=%s", message_id, reply.get("message_id"))
-        finally:
-            self._delete_reaction(message_id, reaction_id)
+                result = self.ai_runner.run(
+                    prompt,
+                    message_id,
+                    tool=conversation.tool,
+                    model=conversation.model,
+                    session_id=None if conversation.resume else conversation.session_id,
+                    resume_session_id=conversation.session_id if conversation.resume else None,
+                )
+                if result.ok:
+                    delivery = extract_file_deliveries(result.result, delivery_dir)
+                    if delivery.paths:
+                        self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
+                    else:
+                        result_text = delivery.text
+                        if delivery.errors:
+                            result_text = "\n".join([result_text, *[f"文件交付失败：{error}" for error in delivery.errors]]).strip()
+                        card = cards.build_ai_card(result.tool, result.model, result_text or "任务已完成。", result.thinking)
+                        try:
+                            reply = self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
+                        except FeishuApiError:
+                            logger.exception("发送 AI 回复卡片失败：消息=%s", message_id)
+                            reply = None
+                        if reply and result.session_id:
+                            self._save_session_mappings(message, reply, conversation, result.session_id)
+                else:
+                    card = cards.build_error_card("AI 分析失败", result.error or "未能获取有效输出", result.stderr)
+                    try:
+                        self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
+                    except FeishuApiError:
+                        logger.exception("发送 AI 回复卡片失败：消息=%s", message_id)
+            finally:
+                self._delete_reaction(message_id, reaction_id)
+
+            if result and result.ok and result.session_id:
+                self._auto_resume_memory(
+                    result.session_id,
+                    conversation.tool,
+                    conversation.model,
+                    conversation.resume,
+                    message_id,
+                )
 
     def _save_session_mappings(
         self,
@@ -338,6 +352,56 @@ class MessageHandler(BaseHandler):
     @staticmethod
     def _reply_in_thread(message: dict[str, Any]) -> bool:
         return bool(message.get("thread_id"))
+
+    def _get_session_lock(self, session_id: str) -> threading.Lock:
+        with self._session_locks_guard:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._session_locks[session_id] = lock
+            return lock
+
+    def _auto_resume_memory(
+        self,
+        session_id: str,
+        tool: str,
+        model: str,
+        is_topic: bool,
+        source_message_id: str,
+    ) -> None:
+        if not self.config.get("ai.auto_memory_resume", True):
+            return
+        prompt = self._build_memory_prompt(is_topic)
+        timeout = int(self.config.get("ai.auto_memory_resume_timeout_seconds", 300))
+        memory_message_id = f"auto-memory-{session_id}-{source_message_id}"
+        logger.info("触发自动记忆 resume：会话=%s 来源消息=%s", session_id, source_message_id)
+        try:
+            result = self.ai_runner.run(
+                prompt,
+                memory_message_id,
+                tool=tool,
+                model=model,
+                resume_session_id=session_id,
+                timeout_seconds=timeout,
+                register=False,
+            )
+            if not result.ok:
+                logger.warning("自动记忆 resume 失败：会话=%s 错误=%s", session_id, result.error)
+        except Exception as exc:
+            logger.warning("自动记忆 resume 异常：会话=%s 错误=%s", session_id, exc)
+
+    @staticmethod
+    def _build_memory_prompt(is_topic: bool) -> str:
+        return f"""【来自系统的自动提示】
+{ "看起来用户刚才又进行了追问，且你已完成" if is_topic else "你已经完成了一次用户的任务/指令/问题" }。请检查是否有按照记忆系统的要求，更新完善记忆文件。
+如果已按照要求更新，请直接忽略本次提醒！
+如果尚未更新，请按照格式要求更新短期记忆，判断是否需要更新或者整理长期记忆，以及是否有识别到用户要求/偏好并需要更新SOUL。
+注意事项：
+1. 为了避免遗忘，你**务必**再次回顾系统提示词中，关于记忆系统的约束，明确你需要做什么，应当如何更新这三个记忆文件。
+2. 记忆系统的核心要求是，简明扼要！沉淀经验！可以追溯！语言要极尽精简凝练，你必须用最少的文字，记录最清晰完整的意思，最核心的内容。避免记忆迅速膨胀，避免记忆变成操作日志。
+3. 如果你认为本次没有值得更新到记忆的东西，则相信你自己，你有权选择不更新。记忆要宁缺毋滥！
+4. 记忆系统是需要维护的，你还需要判断短期记忆是否需要清理（一般两个月以前的可以清理了）、长期记忆是否有过时、是否有遵循简明扼要等核心原则、是否需要更新整理等等。
+"""
 
     def _add_processing_reaction(self, message_id: str) -> str | None:
         emoji = self.config.get("feishu.reaction_processing", "")
