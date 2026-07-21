@@ -1,5 +1,5 @@
 {
-  "version": "v2.0.2",
+  "version": "v2.1.0",
   "feishu": {
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
@@ -47,6 +47,14 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "argument",
+        "output_parser": "stream_json"
+      },
+      "pi": {
+        "command": "pi",
+        "base_args": [ "--print", "--model", "{model}", "--mode", "json", "--approve" ],
+        "session_args": [ "--session-id", "{session_id}" ],
+        "resume_args": [ "--resume", "{session_id}" ],
+        "prompt_transport": "stdin",
         "output_parser": "stream_json"
       }
     }
