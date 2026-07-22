@@ -56,7 +56,7 @@
         "command": "pi",
         "base_args": [ "--print", "--model", "{model}", "--mode", "json", "--approve" ],
         "session_args": [ "--session-id", "{session_id}" ],
-        "resume_args": [ "--resume", "{session_id}" ],
+        "resume_args": [ "--session-id", "{session_id}" ],
         "prompt_transport": "stdin",
         "output_parser": "stream_json"
       }
