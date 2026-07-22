@@ -42,9 +42,11 @@ class TenantTokenProvider:
         data = _read_json_response(request)
         code = data.get("code", -1)
         if code != 0:
+            logger.error("获取 tenant_access_token 失败：code=%s msg=%s", code, data.get("msg"))
             raise FeishuApiError(f"failed to get tenant_access_token: {data.get('msg', data)}", code=code)
         self._token = data["tenant_access_token"]
         self._expires_at = time.time() + max(int(data.get("expire", 7200)) - 60, 60)
+        logger.debug("已刷新 tenant_access_token：有效期=%ss", data.get("expire"))
         return self._token
 
 
@@ -224,6 +226,7 @@ class Messenger:
         data = _read_json_response(request)
         code = data.get("code", 0)
         if code != 0:
+            logger.error("飞书 API 错误：方法=%s 路径=%s code=%s msg=%s", method, path, code, data.get("msg"))
             raise FeishuApiError(str(data.get("msg", data)), code=code)
         return data
 

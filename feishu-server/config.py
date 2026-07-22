@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import logger
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config.json"
@@ -57,6 +59,11 @@ class Config:
             for tool, model in self._runtime_models.items()
             if tool in self.tools()
         }
+        logger.info(
+            "配置已加载：工具=%s 默认CLI=%s",
+            ",".join(self.tools()),
+            self._models.get("default_cli"),
+        )
 
     def snapshot(self) -> dict[str, Any]:
         return copy.deepcopy(self._data)

@@ -217,8 +217,15 @@ class LarkCliWrapper:
                 env=self._environment(),
             )
         except subprocess.TimeoutExpired as exc:
+            logger.error("lark-cli 执行超时（%ss）：%s", self.timeout_seconds, " ".join(args[:3]))
             raise LarkCliError(f"lark-cli 执行超时：{' '.join(args[:3])}") from exc
         if completed.returncode != 0:
+            logger.error(
+                "lark-cli 退出码异常：%s 退出码=%s stderr=%s",
+                " ".join(args[:3]),
+                completed.returncode,
+                completed.stderr[:300] if completed.stderr else "（空）",
+            )
             raise LarkCliError(self._error_text(completed.stderr, completed.stdout))
         return completed.stdout
 

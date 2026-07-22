@@ -242,6 +242,11 @@ class AIRunner:
         logger.info("AI 执行命令：%s", shlex.join(command))
         if spec.prompt_transport == "stdin":
             logger.info("AI 标准输入 prompt：\n%s", prompt_text or "（空）")
+        elif os.name == "nt":
+            logger.warning(
+                "Windows 下使用 argument 方式传递 prompt（%s 字节），多行 JSON 可能被 cmd.exe 破坏",
+                len(prompt_text.encode("utf-8")),
+            )
         started_at = time.monotonic()
         try:
             process = subprocess.Popen(
@@ -302,6 +307,17 @@ class AIRunner:
         if process.returncode != 0 and not parsed.result:
             parsed.ok = False
             parsed.error = stderr.strip() or f"AI 进程退出码异常：{process.returncode}"
+        elapsed = time.monotonic() - started_at
+        logger.info(
+            "AI 进程已结束：消息=%s 退出码=%s 耗时=%.2fs 会话=%s token(输入=%s 缓存=%s 输出=%s)",
+            message_id,
+            process.returncode,
+            elapsed,
+            parsed.session_id or "无",
+            parsed.usage.input_tokens if parsed.usage else None,
+            parsed.usage.cached_tokens if parsed.usage else None,
+            parsed.usage.output_tokens if parsed.usage else None,
+        )
         self._log_ai_output(parsed.result, stderr, ok=parsed.ok)
         return parsed
 

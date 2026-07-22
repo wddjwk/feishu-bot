@@ -22,8 +22,9 @@ class FeishuBotApp:
         event_handler = self._build_event_handler(lark)
         log_level = getattr(lark.LogLevel, str(self.config.get("logging.level", "INFO")).upper(), lark.LogLevel.INFO)
         client = lark.ws.Client(self.app_id, self.app_secret, event_handler=event_handler, log_level=log_level)
-        logger.info("正在启动飞书长连接客户端")
+        logger.info("正在启动飞书长连接客户端：app_id=%s*** log_level=%s", self.app_id[:6], log_level)
         client.start()
+        logger.info("飞书长连接客户端已退出")
 
     def _build_event_handler(self, lark: Any) -> Any:
         builder = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(self._on_message_receive)

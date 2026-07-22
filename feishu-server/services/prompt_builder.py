@@ -68,12 +68,20 @@ def build_prompt(
     messenger: Messenger,
     config: Config,
 ) -> PromptBuildResult:
+    message_id = str(message.get("message_id") or "")
     reply_chain = _trace_reply_chain(message, messenger) if message.get("parent_id") else [message]
     root_message_id = _root_message_id(message, reply_chain)
     work_dir = _work_dir(config, root_message_id)
     group_thread = _group_thread_context(message, messenger, config) if message.get("thread_id") and message.get("chat_type") == "group" else []
     attachment_messages = _merge_messages(reply_chain, group_thread)
     attachments, references = _download_attachments(attachment_messages, messenger, work_dir)
+    logger.debug(
+        "Prompt 构建中：消息=%s 回复链=%s 群上下文=%s 附件=%s",
+        message_id,
+        len(reply_chain),
+        len(group_thread),
+        len(attachments),
+    )
 
     user_input = extract_text(message, resource_references=references).strip()
     user_input = _append_attachment_references(
@@ -102,8 +110,16 @@ def build_prompt(
     }
     if message.get("chat_type") == "group":
         prompt["group_id"] = str(message.get("chat_id") or "")
+    prompt_json = json.dumps(prompt, ensure_ascii=False, indent=2)
+    logger.debug(
+        "Prompt 构建完成：消息=%s 上下文条数=%s prompt长度=%s 工作目录=%s",
+        message_id,
+        len(prompt["context"]),
+        len(prompt_json),
+        work_dir.name,
+    )
     return PromptBuildResult(
-        json.dumps(prompt, ensure_ascii=False, indent=2),
+        prompt_json,
         work_dir=work_dir,
         attached_files=attachments,
     )

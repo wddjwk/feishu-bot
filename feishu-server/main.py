@@ -100,6 +100,16 @@ def main() -> None:
     message_handler = MessageHandler(config, messenger, ai_runner, session_store, scheduler, bot_open_id=bot_open_id)
     app = FeishuBotApp(app_id, app_secret, config, message_handler)
 
+    default_tool = config.current_tool()
+    default_model = config.resolve_model(default_tool)
+    logger.info(
+        "服务初始化完成：版本=%s 默认CLI=%s 默认模型=%s 工具列表=%s",
+        config.version(),
+        default_tool,
+        default_model,
+        ",".join(config.tools()),
+    )
+
     def stop(signum: int, _frame: object) -> None:
         logger.info("收到退出信号 %s，正在停止调度器", signum)
         scheduler.stop()

@@ -5,6 +5,7 @@ from typing import Callable
 
 import cards
 from config import Config, ConfigError
+import logger
 
 
 @dataclass
@@ -87,7 +88,9 @@ def _cli(ctx: CommandContext) -> CommandResponse:
     try:
         model = ctx.config.set_tool(tool)
     except ConfigError as exc:
+        logger.warning("CLI 切换失败：目标=%s 错误=%s", tool, exc)
         return CommandResponse(cards.build_error_card("CLI 切换失败", str(exc)))
+    logger.info("CLI 已切换：%s 模型=%s", tool, model)
     return CommandResponse(cards.build_generic_card("AI CLI 已切换", f"当前工具：`{tool}`\n当前模型：`{model}`", "green"))
 
 
@@ -112,7 +115,9 @@ def _model(ctx: CommandContext) -> CommandResponse:
     try:
         model = ctx.config.set_model(tool, parts[1].strip())
     except ConfigError as exc:
+        logger.warning("模型切换失败：CLI=%s 目标=%s 错误=%s", tool, parts[1].strip(), exc)
         return CommandResponse(cards.build_error_card("模型切换失败", str(exc)))
+    logger.info("模型已切换：%s → %s", tool, model)
     return CommandResponse(cards.build_generic_card("模型已切换", f"`{tool}` → `{model}`", "green"))
 
 
@@ -123,7 +128,9 @@ def _reload(ctx: CommandContext) -> CommandResponse:
         cards.configure_card_width(str(ctx.config.get("feishu.card_width", "half")))
         cards.configure_tool_icons(ctx.config.get("feishu.tool_icons", {}))
     except Exception as exc:
+        logger.exception("配置重载失败：%s", exc)
         return CommandResponse(cards.build_error_card("配置重载失败", str(exc)))
+    logger.info("配置已重新加载")
     return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 和 `model.json` 读取最新配置。", "green"))
 
 
@@ -180,5 +187,7 @@ def _kill(ctx: CommandContext) -> CommandResponse:
         return CommandResponse(cards.build_error_card("终止失败", "请提供 `/running` 中显示的任务 ID；回复正在分析的消息时也可以直接发送 `/kill`。"))
     killed_id = ctx.ai_runner.kill(target_id)
     if not killed_id:
+        logger.warning("终止 AI 进程失败，未找到：标识=%s", target_id)
         return CommandResponse(cards.build_error_card("终止失败", f"没有找到运行中的 AI 进程：`{target_id}`。"))
+    logger.info("用户终止 AI 进程：标识=%s 已终止=%s", target_id, killed_id)
     return CommandResponse(cards.build_error_card("已终止 AI 分析", f"已向任务 `{killed_id}` 发送终止信号。"))

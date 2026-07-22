@@ -71,6 +71,14 @@ class MessageHandler(BaseHandler):
             return
 
         text = extract_text(message).strip()
+        logger.info(
+            "收到用户消息：消息=%s 发送者=%s 类型=%s 聊天=%s 内容=%s",
+            message_id,
+            message.get("sender_id") or "unknown",
+            message.get("message_type"),
+            message.get("chat_type"),
+            text[:80] or "（非文本）",
+        )
         ctx = commands.CommandContext(
             text=text,
             message=message,
@@ -82,6 +90,7 @@ class MessageHandler(BaseHandler):
         )
         command_response = commands.registry.match(ctx)
         if command_response:
+            logger.info("匹配到用户命令：消息=%s 命令=%s", message_id, text.split()[0] if text else text)
             self._reply_card(message, command_response.card)
             return
 
@@ -108,6 +117,13 @@ class MessageHandler(BaseHandler):
             self._reply_card(message, cards.build_error_card("上下文构建失败", str(exc)))
             return
 
+        logger.info(
+            "启动 AI 处理线程：消息=%s CLI=%s 模型=%s 续接=%s",
+            message_id,
+            conversation.tool,
+            conversation.model,
+            conversation.resume,
+        )
         threading.Thread(
             target=self._run_ai_and_reply,
             args=(message, prompt_result.prompt, prompt_result.work_dir, conversation),
@@ -137,6 +153,20 @@ class MessageHandler(BaseHandler):
                     resume_session_id=conversation.session_id if conversation.resume else None,
                 )
                 if result.ok:
+                    logger.info(
+                        "AI 处理完成：消息=%s 会话=%s 回复长度=%s",
+                        message_id,
+                        result.session_id or "无",
+                        len(result.result),
+                    )
+                else:
+                    logger.warning(
+                        "AI 处理失败：消息=%s 错误=%s 退出码=%s",
+                        message_id,
+                        result.error[:200] if result.error else "未知",
+                        result.exit_code,
+                    )
+                if result.ok:
                     delivery = extract_file_deliveries(result.result, delivery_dir)
                     if delivery.paths:
                         self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
@@ -158,6 +188,16 @@ class MessageHandler(BaseHandler):
                         self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
                     except FeishuApiError:
                         logger.exception("发送 AI 回复卡片失败：消息=%s", message_id)
+            except Exception:
+                logger.exception("AI 处理线程发生未预期异常：消息=%s", message_id)
+                try:
+                    self.messenger.reply_card(
+                        message_id,
+                        cards.build_error_card("服务内部错误", "AI 处理过程中发生未预期异常，请重试。"),
+                        reply_in_thread=self._reply_in_thread(message),
+                    )
+                except Exception:
+                    logger.exception("发送错误卡片也失败：消息=%s", message_id)
             finally:
                 self._delete_reaction(message_id, reaction_id)
 
