@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import os
 import re
 import shlex
@@ -21,9 +20,7 @@ import cards
 from config import Config, ConfigError
 from services.ai_runner import AIRunner
 from services.messenger import FeishuApiError, Messenger
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 VALID_TASK_TYPES = {"agent", "script"}
 

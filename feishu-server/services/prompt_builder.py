@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,9 +10,7 @@ from typing import Any
 
 from config import Config
 from services.messenger import FeishuApiError, Messenger
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 IMAGE_KEY_PATTERN = re.compile(r"\bimg_[A-Za-z0-9_-]+\b")
 FILE_KEY_PATTERN = re.compile(r"\bfile_[A-Za-z0-9_-]+\b")

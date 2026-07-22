@@ -331,7 +331,7 @@ class ParseOutputTests(unittest.TestCase):
         self.assertEqual(calls["env"]["MODEL_ENDPOINT"], "https://model.example.test")
         self.assertEqual(calls["env"]["MODEL_FLAG"], "1")
 
-    def test_logs_parsed_reply_instead_of_raw_stream_json(self):
+    def test_logs_parsed_result_on_success(self):
         class FakeConfig:
             def current_tool(self):
                 return "claude"
@@ -361,12 +361,13 @@ class ParseOutputTests(unittest.TestCase):
                 return '{"type":"result","result":"简洁回复"}\n', ""
 
         with patch("services.ai_runner.subprocess.Popen", return_value=FakeProcess()), self.assertLogs(
-            "services.ai_runner", level="INFO"
+            "feishu_server", level="INFO"
         ) as logs:
             result = AIRunner(FakeConfig()).run("用户问题", "m1")
 
         output = "\n".join(logs.output)
         self.assertTrue(result.ok)
+        self.assertIn("AI 执行成功", output)
         self.assertIn("AI 回复：", output)
         self.assertIn("简洁回复", output)
         self.assertNotIn('{"type":"result"', output)

@@ -3,10 +3,22 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$ROOT/feishu-server"
+LOG_DIR="$SERVER_DIR/logs"
 PID_FILE="$ROOT/.server.pid"
 VENV_DIR="$ROOT/.venv"
 PY="$VENV_DIR/bin/python"
 PIP_INDEX="https://mirrors.aliyun.com/pypi/simple"
+
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+ok()   { echo -e "${GREEN}[OK]${NC} $*"; }
+info() { echo -e "${BLUE}[INFO]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
 ensure_venv() {
   if [[ ! -x "$PY" ]]; then
@@ -35,23 +47,32 @@ is_running() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+find_latest_log() {
+  local latest
+  latest=$(ls -t "$LOG_DIR"/feishu_server_*.log 2>/dev/null | head -1)
+  if [[ -z "$latest" ]]; then
+    return 1
+  fi
+  echo "$latest"
+}
+
 start() {
   if is_running; then
-    echo "FeishuBot is already running: $(cat "$PID_FILE")"
+    warn "FeishuBot is already running: $(cat "$PID_FILE")"
     return 0
   fi
   ensure_venv
   install_hooks
-  mkdir -p "$SERVER_DIR/data" "$SERVER_DIR/logs"
+  mkdir -p "$SERVER_DIR/data" "$LOG_DIR"
   cd "$SERVER_DIR"
   setsid "$PY" main.py >/dev/null 2>&1 &
   echo "$!" > "$PID_FILE"
-  echo "FeishuBot started: $(cat "$PID_FILE")"
+  ok "FeishuBot started: PID=$(cat "$PID_FILE")"
 }
 
 stop() {
   if ! is_running; then
-    echo "FeishuBot is not running"
+    warn "FeishuBot is not running"
     rm -f "$PID_FILE"
     return 0
   fi
@@ -61,45 +82,72 @@ stop() {
   for _ in {1..20}; do
     if ! kill -0 "$pid" 2>/dev/null; then
       rm -f "$PID_FILE"
-      echo "FeishuBot stopped"
+      ok "FeishuBot stopped"
       return 0
     fi
     sleep 0.5
   done
   kill -KILL "$pid" 2>/dev/null || true
   rm -f "$PID_FILE"
-  echo "FeishuBot killed after graceful stop timeout"
+  err "FeishuBot killed after graceful stop timeout"
 }
 
 status() {
   if ! is_running; then
-    echo "FeishuBot is not running"
+    warn "FeishuBot is not running"
     return 1
   fi
   local pid
   pid="$(cat "$PID_FILE")"
+  info "FeishuBot is running: PID=$pid"
   ps -p "$pid" -o pid=,etime=,rss=,cmd=
 }
 
 show_log() {
-  if ! is_running; then
-    echo "FeishuBot is not running" >&2
+  local log_file
+  log_file=$(find_latest_log) || {
+    err "No log file found in $LOG_DIR/"
     return 1
+  }
+  info "Following log: $log_file"
+  info "Press Ctrl+C to exit"
+  exec tail -f "$log_file"
+}
+
+vlog() {
+  local editor="${EDITOR:-nvim}"
+  local log_file
+
+  if [[ -z "${1:-}" ]]; then
+    log_file=$(find_latest_log) || {
+      err "No log file found in $LOG_DIR/"
+      return 1
+    }
+  else
+    local matches
+    matches=$(ls "$LOG_DIR"/*"$1"*.log 2>/dev/null || true)
+    if [[ -z "$matches" ]]; then
+      err "No log file matching '$1' in $LOG_DIR/"
+      return 1
+    fi
+    local count
+    count=$(echo "$matches" | wc -l)
+    if [[ "$count" -gt 1 ]]; then
+      err "Multiple log files match '$1':"
+      echo "$matches" >&2
+      return 1
+    fi
+    log_file="$matches"
   fi
-  local pid log_file
-  pid="$(cat "$PID_FILE")"
-  log_file="$SERVER_DIR/logs/feishu-bot-${pid}.log"
-  if [[ ! -f "$log_file" ]]; then
-    echo "Current service log is not ready: $log_file" >&2
-    return 1
-  fi
-  exec tail -n 200 -F "$log_file"
+
+  info "Opening: $log_file"
+  exec "$editor" "$log_file"
 }
 
 deferred_restart() {
   local delay="${1:-5}"
   (sleep "$delay"; "$ROOT/manager" restart) >/dev/null 2>&1 &
-  echo "Deferred restart scheduled after ${delay}s"
+  info "Deferred restart scheduled after ${delay}s"
 }
 
 case "${1:-}" in
@@ -109,5 +157,6 @@ case "${1:-}" in
   deferred-restart) deferred_restart "${2:-5}" ;;
   status) status ;;
   log) show_log ;;
-  *) echo "Usage: $0 {start|stop|restart|deferred-restart [seconds]|status|log}" >&2; exit 2 ;;
+  vlog) vlog "${2:-}" ;;
+  *) echo "Usage: $0 {start|stop|restart|deferred-restart [seconds]|status|log|vlog [file]}" >&2; exit 2 ;;
 esac

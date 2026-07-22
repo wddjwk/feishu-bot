@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import mimetypes
 import threading
 import time
@@ -14,9 +13,7 @@ from urllib.request import Request, urlopen
 
 from config import Config
 from utils.lark_cli_wrapper import LarkCliError, LarkCliWrapper
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 
 class FeishuApiError(RuntimeError):

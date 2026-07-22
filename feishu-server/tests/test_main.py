@@ -13,16 +13,6 @@ class FakeConfig:
         return "v1.2.3"
 
 
-class LoggingConfig:
-    def __init__(self, log_dir: Path) -> None:
-        self.log_dir = log_dir
-
-    def resolve_path(self, dotted):
-        if dotted != "logging.dir":
-            raise AssertionError(dotted)
-        return self.log_dir
-
-
 class FakeMessenger:
     def __init__(self) -> None:
         self.sent: list[dict] = []
@@ -68,20 +58,26 @@ class StartupNotificationTests(unittest.TestCase):
         self.assertIn("更新完成", content)
 
     def test_private_rotating_log_handler_creates_owner_only_file(self):
+        import logger
+
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bot.log"
-            handler = main.PrivateRotatingFileHandler(path, maxBytes=1024, backupCount=1, encoding="utf-8")
+            handler = logger._PrivateRotatingFileHandler(path, maxBytes=1024, backupCount=1, encoding="utf-8")
             handler.close()
 
             mode = stat.S_IMODE(path.stat().st_mode)
 
         self.assertEqual(mode, 0o600)
 
-    def test_logging_uses_current_process_pid_file(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(main.os, "getpid", return_value=4242):
-            path = main._current_log_path(LoggingConfig(Path(tmp)))
+    def test_setup_logging_creates_timestamped_log_file(self):
+        import logger
 
-        self.assertEqual(path, Path(tmp) / "feishu-bot-4242.log")
+        with tempfile.TemporaryDirectory() as tmp:
+            log_file = logger.setup_logging(Path(tmp), level="INFO", max_bytes=1024, backup_count=1)
+
+            self.assertTrue(log_file.name.startswith("feishu_server_"))
+            self.assertTrue(log_file.name.endswith(".log"))
+            self.assertTrue(log_file.is_file())
 
 
 if __name__ == "__main__":

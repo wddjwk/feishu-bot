@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from config import Config
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 STORE_VERSION = 2
 LINK_RETENTION_PRIORITY = {

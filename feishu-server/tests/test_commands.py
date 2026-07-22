@@ -114,7 +114,7 @@ class CommandTests(unittest.TestCase):
 
         self.assertEqual(config.current_tool(), "claude")
         self.assertEqual(config.resolve_model(), "runtime-model")
-        self.assertEqual(card["header"]["title"]["content"], "🐇Codebuddy model")
+        self.assertEqual(card["header"]["title"]["content"], "🧑‍🎤Codebuddy model")
         self.assertEqual(response.card["header"]["template"], "green")
 
 

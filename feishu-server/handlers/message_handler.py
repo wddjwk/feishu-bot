@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import threading
 from collections import deque
 from contextlib import nullcontext
@@ -19,9 +18,7 @@ from services.prompt_builder import build_prompt, extract_text, is_standalone_fi
 from services.session_store import SessionStore
 from utils.file_delivery import extract_file_deliveries, is_image_file
 from utils.lark_cli_wrapper import LarkCliError
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 
 @dataclass(frozen=True)

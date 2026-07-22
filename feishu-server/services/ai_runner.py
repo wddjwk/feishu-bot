@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import shlex
@@ -14,9 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from config import Config, ConfigError
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 
 @dataclass
@@ -277,7 +274,7 @@ class AIRunner:
             self._kill_process_group(process, signal.SIGKILL)
             stdout, stderr = process.communicate()
             partial = parse_output(spec.output_parser, stdout, stderr)
-            self._log_ai_output(partial.result, stderr, completed=False)
+            self._log_ai_output(partial.result, stderr, ok=False)
             elapsed = time.monotonic() - started_at
             logger.error("AI 进程超时：消息=%s 耗时=%.2fs 超时=%ss", message_id, elapsed, timeout)
             return AIResult(
@@ -305,7 +302,7 @@ class AIRunner:
         if process.returncode != 0 and not parsed.result:
             parsed.ok = False
             parsed.error = stderr.strip() or f"AI 进程退出码异常：{process.returncode}"
-        self._log_ai_output(parsed.result, stderr, completed=True)
+        self._log_ai_output(parsed.result, stderr, ok=parsed.ok)
         return parsed
 
     def _build_command(
@@ -318,13 +315,19 @@ class AIRunner:
         return ToolSpec.from_config(tool, self.config).build_command(model, session_id, resume_session_id)
 
     @staticmethod
-    def _log_ai_output(result: str, stderr: str, *, completed: bool) -> None:
-        if result.strip():
-            logger.info("AI 回复：\n%s", result.strip())
+    def _log_ai_output(result: str, stderr: str, *, ok: bool) -> None:
+        if ok:
+            logger.info("AI 执行成功")
+            if result.strip():
+                logger.info("AI 回复：\n%s", result.strip())
+            if stderr.strip():
+                logger.info("AI stderr：\n%s", stderr.strip())
         else:
-            logger.info("AI 已%s（未解析到可展示回复）", "完成" if completed else "停止")
-        if stderr.strip():
-            logger.warning("AI 错误输出：\n%s", stderr.strip())
+            logger.error(
+                "AI 执行失败\n── stderr ──\n%s\n── result ──\n%s",
+                stderr or "（空）",
+                result or "（空）",
+            )
 
     @staticmethod
     def _kill_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:

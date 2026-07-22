@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from config import Config
 from handlers.message_handler import MessageHandler
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 
 class FeishuBotApp:
@@ -21,6 +18,7 @@ class FeishuBotApp:
     def start(self) -> None:
         import lark_oapi as lark
 
+        logger.reconfigure_lark()
         event_handler = self._build_event_handler(lark)
         log_level = getattr(lark.LogLevel, str(self.config.get("logging.level", "INFO")).upper(), lark.LogLevel.INFO)
         client = lark.ws.Client(self.app_id, self.app_secret, event_handler=event_handler, log_level=log_level)

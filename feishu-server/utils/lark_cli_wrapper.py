@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import shutil
 import subprocess
@@ -10,9 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
-
-
-logger = logging.getLogger(__name__)
+import logger
 
 
 class LarkCliError(RuntimeError):

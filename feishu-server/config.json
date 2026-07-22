@@ -1,5 +1,5 @@
 {
-  "version": "v2.2.0",
+  "version": "v2.3.0",
   "feishu": {
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
@@ -86,7 +86,7 @@
   "logging": {
     "level": "INFO",
     "dir": "logs",
-    "file_max_bytes": 10485760,
-    "backup_count": 10
+    "file_max_bytes": 104857600,
+    "backup_count": 5
   }
 }
