@@ -88,5 +88,11 @@
     "dir": "logs",
     "file_max_bytes": 104857600,
     "backup_count": 5
-  }
+  },
+  "export_paths": [
+    "agent-workspace/memory",
+    "feishu-server/data",
+    "feishu-server/config.json",
+    "feishu-server/model.json"
+  ]
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import cards
@@ -191,3 +192,85 @@ def _kill(ctx: CommandContext) -> CommandResponse:
         return CommandResponse(cards.build_error_card("终止失败", f"没有找到运行中的 AI 进程：`{target_id}`。"))
     logger.info("用户终止 AI 进程：标识=%s 已终止=%s", target_id, killed_id)
     return CommandResponse(cards.build_error_card("已终止 AI 分析", f"已向任务 `{killed_id}` 发送终止信号。"))
+
+
+def _export_config(ctx: CommandContext) -> tuple[list[str], Path, Path]:
+    config_paths = ctx.config.get("export_paths")
+    if not isinstance(config_paths, list) or not config_paths:
+        raise RuntimeError("config.json 缺少 export_paths 配置")
+    project_root = ctx.config.base_dir().parent
+    dest_dir = ctx.config.resolve_path("prompt.work_root")
+    return config_paths, project_root, dest_dir
+
+
+@registry.exact(["/export"], "导出数据为 zip 文件")
+def _export(ctx: CommandContext) -> CommandResponse:
+    from utils.data_transfer import DataTransferError, create_export_zip
+
+    reply_in_thread = bool(ctx.message.get("thread_id"))
+    zip_path = None
+    try:
+        config_paths, project_root, dest_dir = _export_config(ctx)
+        zip_path = create_export_zip(config_paths, project_root, dest_dir)
+        ctx.messenger.reply_file(ctx.message["message_id"], zip_path, reply_in_thread=reply_in_thread)
+        size_kb = zip_path.stat().st_size / 1024
+        logger.info("数据导出成功：文件=%s 大小=%.1fKB", zip_path.name, size_kb)
+        return CommandResponse(cards.build_generic_card("数据导出成功", f"已导出 `{zip_path.name}`（{size_kb:.1f} KB）", "green"))
+    except (DataTransferError, Exception) as exc:
+        logger.exception("数据导出失败：%s", exc)
+        return CommandResponse(cards.build_error_card("数据导出失败", str(exc)))
+    finally:
+        if zip_path and zip_path.exists():
+            zip_path.unlink(missing_ok=True)
+
+
+@registry.exact(["/import"], "从 zip 文件导入数据（回复文件消息使用）")
+def _import(ctx: CommandContext) -> CommandResponse:
+    from services.prompt_builder import extract_files, normalize_message
+    from utils.data_transfer import (
+        DataTransferError,
+        create_export_zip,
+        extract_zip,
+        validate_zip_entries,
+    )
+
+    reply_in_thread = bool(ctx.message.get("thread_id"))
+    parent_id = ctx.message.get("parent_id")
+    if not parent_id:
+        return CommandResponse(cards.build_error_card("导入失败", "请回复一个 zip 文件消息使用 `/import`。"))
+
+    downloaded_zip = None
+    backup_zip = None
+    try:
+        parent_raw = ctx.messenger.get_message(parent_id)
+        if not parent_raw:
+            return CommandResponse(cards.build_error_card("导入失败", "未找到被回复的消息。"))
+        parent_msg = normalize_message(parent_raw)
+        files = [f for f in extract_files(parent_msg) if f["type"] == "file"]
+        if not files:
+            return CommandResponse(cards.build_error_card("导入失败", "被回复的消息不包含文件，请回复一个 zip 文件消息。"))
+
+        config_paths, project_root, dest_dir = _export_config(ctx)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        downloaded_zip = ctx.messenger.download_message_resource(
+            parent_id, files[0]["key"], "file", dest_dir / f"import-{files[0]['name']}"
+        )
+
+        validate_zip_entries(downloaded_zip, config_paths)
+
+        backup_zip = create_export_zip(config_paths, project_root, dest_dir, prefix="bak-")
+        ctx.messenger.reply_file(ctx.message["message_id"], backup_zip, reply_in_thread=reply_in_thread)
+
+        count = extract_zip(downloaded_zip, project_root)
+        logger.info("数据导入成功：解压文件数=%s", count)
+        return CommandResponse(cards.build_generic_card("数据导入成功", f"已导入 {count} 个文件，旧数据备份已发送。", "green"))
+    except DataTransferError as exc:
+        logger.warning("数据导入校验失败：%s", exc)
+        return CommandResponse(cards.build_error_card("导入失败", str(exc)))
+    except Exception as exc:
+        logger.exception("数据导入失败：%s", exc)
+        return CommandResponse(cards.build_error_card("数据导入失败", str(exc)))
+    finally:
+        for path in (downloaded_zip, backup_zip):
+            if path and Path(path).exists():
+                Path(path).unlink(missing_ok=True)
