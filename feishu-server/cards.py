@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
 MAX_SECTION_CHARS = 100_000
 MARKDOWN_CHUNK_CHARS = 18_000
 PLAIN_TEXT_CHUNK_CHARS = 9_000
+MAX_CARD_BYTES = 30 * 1024
+THINKING_RATIO = 0.75
 CARD_WIDTHS = {"half", "full"}
 _card_width = "half"
 _tool_icons: dict[str, str] = {}
@@ -34,6 +37,24 @@ def _limit_text(text: str, max_chars: int) -> str:
 
 def _truncate(text: str, max_chars: int) -> str:
     return _limit_text(text, max_chars)
+
+
+_TRUNCATE_PREFIX = "... 内容过长，已截断 ...\n\n"
+
+
+def _truncate_front(text: str, max_bytes: int) -> str:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    prefix_bytes = _TRUNCATE_PREFIX.encode("utf-8")
+    budget = max_bytes - len(prefix_bytes)
+    if budget <= 0:
+        return _TRUNCATE_PREFIX
+    truncated = encoded[-budget:]
+    # avoid splitting a multi-byte character
+    while truncated and (truncated[0] & 0xC0) == 0x80:
+        truncated = truncated[1:]
+    return _TRUNCATE_PREFIX + truncated.decode("utf-8")
 
 
 def _chunks(text: str, max_chars: int) -> list[str]:
@@ -126,39 +147,65 @@ def plain_text_elements(content: str, *, text_color: str = "default") -> list[di
     ]
 
 
+def _thinking_elements(thinking_text: str) -> list[dict[str, Any]]:
+    thinking_title = f"分析过程 ({len(thinking_text)}字)"
+    return [
+        {"tag": "hr"},
+        {
+            "tag": "collapsible_panel",
+            "expanded": False,
+            "header": {
+                "title": {"tag": "plain_text", "content": thinking_title},
+                "vertical_align": "center",
+                "icon": {
+                    "tag": "standard_icon",
+                    "token": "down-small-ccm_outlined",
+                    "color": "",
+                    "size": "16px 16px",
+                },
+                "icon_position": "right",
+                "icon_expanded_angle": -180,
+            },
+            "border": {"color": "grey", "corner_radius": "5px"},
+            "vertical_spacing": "8px",
+            "padding": "8px 8px 8px 8px",
+            "elements": plain_text_elements(thinking_text),
+        },
+    ]
+
+
+def _card_bytes(card: dict[str, Any]) -> int:
+    return len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
+
+
 def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dict[str, Any]:
     display_tool = tool.capitalize()
     title = f"{_tool_icons.get(tool, '🤖')}{display_tool} {model}"
+    result = _limit_text(result, 10_000)
     elements = markdown_elements(result)
     thinking_text = thinking.strip()
+
     if thinking_text:
-        thinking_title = f"分析过程 ({len(thinking_text)}字)"
-        elements.extend(
-            [
-                {"tag": "hr"},
-                {
-                    "tag": "collapsible_panel",
-                    "expanded": False,
-                    "header": {
-                        "title": {"tag": "plain_text", "content": thinking_title},
-                        "vertical_align": "center",
-                        "icon": {
-                            "tag": "standard_icon",
-                            "token": "down-small-ccm_outlined",
-                            "color": "",
-                            "size": "16px 16px",
-                        },
-                        "icon_position": "right",
-                        "icon_expanded_angle": -180,
-                    },
-                    "border": {"color": "grey", "corner_radius": "5px"},
-                    "vertical_spacing": "8px",
-                    "padding": "8px 8px 8px 8px",
-                    "elements": plain_text_elements(thinking_text),
-                },
-            ]
-        )
-    return _base_card(title, "blue", elements, summary=_truncate(result.replace("\n", " "), 100))
+        probe = _base_card(title, "blue", list(elements), summary=_truncate(result.replace("\n", " "), 100))
+        result_bytes = _card_bytes(probe)
+        budget = min(int(MAX_CARD_BYTES * THINKING_RATIO), MAX_CARD_BYTES - result_bytes - 512)
+        if budget > 0:
+            truncated_thinking = _truncate_front(thinking_text, budget)
+            elements.extend(_thinking_elements(truncated_thinking))
+
+    card = _base_card(title, "blue", elements, summary=_truncate(result.replace("\n", " "), 100))
+
+    if thinking_text and _card_bytes(card) > MAX_CARD_BYTES:
+        elements = markdown_elements(result)
+        probe = _base_card(title, "blue", list(elements), summary=_truncate(result.replace("\n", " "), 100))
+        result_bytes = _card_bytes(probe)
+        budget = MAX_CARD_BYTES - result_bytes - 1024
+        if budget > 0:
+            truncated_thinking = _truncate_front(thinking_text, budget)
+            elements.extend(_thinking_elements(truncated_thinking))
+        card = _base_card(title, "blue", elements, summary=_truncate(result.replace("\n", " "), 100))
+
+    return card
 
 
 def build_error_card(title: str, message: str, details: str = "") -> dict[str, Any]:
