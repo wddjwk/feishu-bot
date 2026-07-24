@@ -1,5 +1,5 @@
 {
-  "version": "v2.3.0",
+  "version": "v2.4.4",
   "feishu": {
     "base_url": "https://open.feishu.cn/open-apis",
     "reply_in_thread": false,
@@ -26,7 +26,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "stream_json"
+        "output_parser": "claude-stream-json"
       },
       "claude": {
         "command": "claude",
@@ -34,7 +34,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "stream_json"
+        "output_parser": "claude-stream-json"
       },
       "copilot": {
         "command": "copilot",
@@ -42,7 +42,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "copilot_json"
+        "output_parser": "copilot-json"
       },
       "codebuddy": {
         "command": "codebuddy",
@@ -50,7 +50,7 @@
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "argument",
-        "output_parser": "stream_json"
+        "output_parser": "claude-stream-json"
       },
       "pi": {
         "command": "pi",
@@ -58,9 +58,12 @@
         "session_args": [ "--session-id", "{session_id}" ],
         "resume_args": [ "--session-id", "{session_id}" ],
         "prompt_transport": "stdin",
-        "output_parser": "stream_json"
+        "output_parser": "pi-json"
       }
     }
+  },
+  "features": {
+    "show_token_usage_on_card": true
   },
   "prompt": {
     "group_thread_context_limit": 100,

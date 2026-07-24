@@ -55,5 +55,53 @@ class CardTests(unittest.TestCase):
         self.assertIn("ID：`daily`", content)
 
 
+class UsageSuffixTests(unittest.TestCase):
+    def setUp(self):
+        cards.configure_tool_icons({"codebuddy": "🐇"})
+        self.addCleanup(cards.configure_tool_icons, {})
+
+    def test_format_count_units(self):
+        self.assertEqual(cards._format_count(None), "0")
+        self.assertEqual(cards._format_count(0), "0")
+        self.assertEqual(cards._format_count(500), "500")
+        self.assertEqual(cards._format_count(999), "999")
+        self.assertEqual(cards._format_count(1000), "1.0K")
+        self.assertEqual(cards._format_count(1500), "1.5K")
+        self.assertEqual(cards._format_count(9999), "10K")
+        self.assertEqual(cards._format_count(18928), "19K")
+        self.assertEqual(cards._format_count(100_000), "100K")
+        self.assertEqual(cards._format_count(999_999), "1000K")
+        self.assertEqual(cards._format_count(1_000_000), "1.0M")
+        self.assertEqual(cards._format_count(1_500_000), "1.5M")
+        self.assertEqual(cards._format_count(10_000_000), "10M")
+
+    def test_format_usage_suffix_empty_cases(self):
+        self.assertEqual(cards._format_usage_suffix(None), "")
+        from services.ai_runner import TokenUsage
+        self.assertEqual(cards._format_usage_suffix(TokenUsage()), "")
+        self.assertEqual(cards._format_usage_suffix(TokenUsage(0, 0, 0)), "")
+
+    def test_format_usage_suffix_formats(self):
+        from services.ai_runner import TokenUsage
+        self.assertEqual(cards._format_usage_suffix(TokenUsage(500, 0, 200)), "500↑/0/200↓")
+        self.assertEqual(cards._format_usage_suffix(TokenUsage(18928, 0, 27)), "19K↑/0/27↓")
+        self.assertEqual(cards._format_usage_suffix(TokenUsage(27065, 18513, 46)), "27K↑/19K/46↓")
+
+    def test_build_ai_card_with_usage(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card(
+            "codebuddy", "deepseek-v4-flash", "OK", "",
+            usage=TokenUsage(18928, 0, 27),
+        )
+        self.assertEqual(
+            card["header"]["title"]["content"],
+            "🐇Codebuddy deepseek-v4-flash | 19K↑/0/27↓",
+        )
+
+    def test_build_ai_card_without_usage_backward_compat(self):
+        card = cards.build_ai_card("codebuddy", "deepseek-v4-flash", "OK")
+        self.assertEqual(card["header"]["title"]["content"], "🐇Codebuddy deepseek-v4-flash")
+
+
 if __name__ == "__main__":
     unittest.main()

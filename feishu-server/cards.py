@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from services.ai_runner import TokenUsage
 
 MAX_SECTION_CHARS = 100_000
 MARKDOWN_CHUNK_CHARS = 18_000
@@ -247,9 +250,41 @@ def _card_bytes(card: dict[str, Any]) -> int:
     return len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
 
 
-def build_ai_card(tool: str, model: str, result: str, thinking: str = "") -> dict[str, Any]:
+def _format_count(n: int | None) -> str:
+    if n is None or n <= 0:
+        return "0"
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        value = n / 1000
+        rounded = round(value)
+        return f"{value:.1f}K" if rounded < 10 else f"{rounded}K"
+    value = n / 1_000_000
+    rounded = round(value)
+    return f"{value:.1f}M" if rounded < 10 else f"{rounded}M"
+
+
+def _format_usage_suffix(usage: "TokenUsage | None") -> str:
+    """格式化 token 用量为 "read↑/cache/write↓"。任一分量有值才输出。"""
+    if usage is None:
+        return ""
+    input_t = getattr(usage, "input_tokens", None)
+    cached_t = getattr(usage, "cached_tokens", None)
+    output_t = getattr(usage, "output_tokens", None)
+    if not any(isinstance(v, int) and v > 0 for v in (input_t, cached_t, output_t)):
+        return ""
+    read = _format_count(input_t)
+    cache = _format_count(cached_t)
+    write = _format_count(output_t)
+    return f"{read}↑/{cache}/{write}↓"
+
+
+def build_ai_card(tool: str, model: str, result: str, thinking: str = "", usage: "TokenUsage | None" = None) -> dict[str, Any]:
     display_tool = tool.capitalize()
     title = f"{_tool_icons.get(tool, '🤖')}{display_tool} {model}"
+    suffix = _format_usage_suffix(usage)
+    if suffix:
+        title = f"{title} | {suffix}"
     result = _limit_text(result, 10_000)
     elements = markdown_elements(result)
     thinking_text = thinking.strip()

@@ -3,7 +3,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from services.ai_runner import AIRunner, parse_output
+from services.ai_runner import (
+    AIRunner,
+    BaseOutputParser,
+    ClaudeParser,
+    CodeBuddyParser,
+    CopilotParser,
+    PiParser,
+    QoderCliParser,
+    get_parser,
+    parse_output,
+)
 
 
 class ParseOutputTests(unittest.TestCase):
@@ -14,7 +24,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"final answer","usage":{"input_tokens":3,"output_tokens":4}}',
             ]
         )
-        result = parse_output("stream_json", stdout)
+        result = parse_output("claude-stream-json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.session_id, "s1")
         self.assertEqual(result.result, "final answer")
@@ -29,7 +39,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"ok"}',
             ]
         )
-        result = parse_output("stream_json", stdout)
+        result = parse_output("claude-stream-json", stdout)
         self.assertIn("📚 Skill scheduler", result.thinking)
         self.assertIn("🛠 Tool bash", result.thinking)
         self.assertEqual(result.result, "ok")
@@ -42,7 +52,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","result":"done","session_id":"abc"}',
             ]
         )
-        result = parse_output("copilot_json", stdout)
+        result = parse_output("copilot-json", stdout)
         self.assertEqual(result.thinking, "step 1")
         self.assertEqual(result.result, "done")
         self.assertEqual(result.session_id, "abc")
@@ -54,7 +64,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"content_delta","delta":"lo"}',
             ]
         )
-        result = parse_output("copilot_json", stdout)
+        result = parse_output("copilot-json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "hello")
 
@@ -67,14 +77,14 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","sessionId":"s1","exitCode":0}',
             ]
         )
-        result = parse_output("copilot_json", stdout)
+        result = parse_output("copilot-json", stdout)
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "OK")
         self.assertEqual(result.session_id, "s1")
         self.assertEqual(result.usage.output_tokens, 4)
 
     def test_plain_stdout_fallback(self):
-        result = parse_output("stream_json", "hello\nworld\n")
+        result = parse_output("claude-stream-json", "hello\nworld\n")
         self.assertTrue(result.ok)
         self.assertEqual(result.result, "world")
 
@@ -85,7 +95,7 @@ class ParseOutputTests(unittest.TestCase):
                 '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["rate limited"]}',
             ]
         )
-        result = parse_output("stream_json", stdout)
+        result = parse_output("claude-stream-json", stdout)
         self.assertFalse(result.ok)
         self.assertEqual(result.error, "rate limited")
 
@@ -109,7 +119,7 @@ class ParseOutputTests(unittest.TestCase):
                     "session_args": ["--session-id", "{session_id}"],
                     "resume_args": ["--resume", "{session_id}"],
                     "prompt_transport": "argument",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def resolve_path(self, dotted):
@@ -149,7 +159,7 @@ class ParseOutputTests(unittest.TestCase):
                     "session_args": ["--session-id", "{session_id}"],
                     "resume_args": ["--resume", "{session_id}"],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
         runner = AIRunner(FakeConfig())
@@ -176,7 +186,7 @@ class ParseOutputTests(unittest.TestCase):
                     "session_args": ["--session-id", "{session_id}"],
                     "resume_args": ["--resume", "{session_id}"],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def resolve_path(self, _dotted):
@@ -212,7 +222,7 @@ class ParseOutputTests(unittest.TestCase):
                     "session_args": ["--session-id", "{session_id}"],
                     "resume_args": ["--resume", "{session_id}"],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
         config = MutableConfig()
@@ -273,7 +283,7 @@ class ParseOutputTests(unittest.TestCase):
                     "command": "codebuddy",
                     "base_args": ["--print"],
                     "prompt_transport": "argument",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def get(self, dotted, default=None):
@@ -301,7 +311,7 @@ class ParseOutputTests(unittest.TestCase):
                     "command": "claude",
                     "base_args": [],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def model_environment(self, _tool):
@@ -344,7 +354,7 @@ class ParseOutputTests(unittest.TestCase):
                     "command": "claude",
                     "base_args": [],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def resolve_path(self, _dotted):
@@ -390,7 +400,7 @@ class ParseOutputTests(unittest.TestCase):
                     "command": "claude",
                     "base_args": [],
                     "prompt_transport": "stdin",
-                    "output_parser": "stream_json",
+                    "output_parser": "claude-stream-json",
                 }
 
             def resolve_path(self, _dotted):
@@ -416,6 +426,61 @@ class ParseOutputTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(calls["cwd"], str(workspace))
+
+
+class ParserRegistryTests(unittest.TestCase):
+    """验证解析器注册表与工厂的自动注册、inherits 跳过机制、继承关系。"""
+
+    def test_only_canonical_names_registered(self):
+        self.assertEqual(
+            set(BaseOutputParser._registry),
+            {"claude-stream-json", "pi-json", "copilot-json"},
+        )
+
+    def test_qodercli_and_codebuddy_exist_but_not_registered(self):
+        self.assertTrue(issubclass(QoderCliParser, ClaudeParser))
+        self.assertTrue(issubclass(CodeBuddyParser, ClaudeParser))
+        self.assertEqual(QoderCliParser.inherits, "claude-stream-json")
+        self.assertEqual(CodeBuddyParser.inherits, "claude-stream-json")
+        self.assertNotIn("qodercli-stream-json", BaseOutputParser._registry)
+        self.assertNotIn("codebuddy-stream-json", BaseOutputParser._registry)
+
+    def test_canonical_names_resolve(self):
+        self.assertIsInstance(get_parser("claude-stream-json"), ClaudeParser)
+        self.assertIsInstance(get_parser("pi-json"), PiParser)
+        self.assertIsInstance(get_parser("copilot-json"), CopilotParser)
+
+    def test_unknown_parser_name_raises(self):
+        with self.assertRaises(ValueError):
+            get_parser("unknown-parser")
+        with self.assertRaises(ValueError):
+            get_parser("qodercli-stream-json")
+        with self.assertRaises(ValueError):
+            get_parser("stream_json")
+
+    def test_parse_output_with_canonical_names(self):
+        claude_stdout = (
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+            '{"type":"result","result":"hi","session_id":"s"}'
+        )
+        self.assertEqual(parse_output("claude-stream-json", claude_stdout).result, "hi")
+
+        pi_stdout = (
+            '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}\n'
+            '{"type":"turn_end","message":{"stopReason":"stop","content":[{"type":"text","text":"ok"}]}}'
+        )
+        self.assertEqual(parse_output("pi-json", pi_stdout).result, "ok")
+
+        copilot_stdout = '{"type":"content_delta","delta":"ab"}\n{"type":"result","result":"ab"}'
+        self.assertEqual(parse_output("copilot-json", copilot_stdout).result, "ab")
+
+    def test_subclasses_reuse_parent_parse(self):
+        claude_stdout = (
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}\n'
+            '{"type":"result","result":"x"}'
+        )
+        self.assertEqual(QoderCliParser().parse(claude_stdout, "").result, "x")
+        self.assertEqual(CodeBuddyParser().parse(claude_stdout, "").result, "x")
 
 
 if __name__ == "__main__":

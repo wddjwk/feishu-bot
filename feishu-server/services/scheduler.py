@@ -262,7 +262,13 @@ class Scheduler:
             timeout_seconds=task.timeout_seconds,
         )
         if result.ok:
-            return cards.build_ai_card(result.tool, result.model, result.result, result.thinking), result.result
+            return cards.build_ai_card(
+                result.tool,
+                result.model,
+                result.result,
+                result.thinking,
+                usage=result.usage if self.config.get("features.show_token_usage_on_card", True) else None,
+            ), result.result
         return cards.build_error_card("AI 定时任务失败", result.error or "未能获取有效输出", result.stderr), result.error or result.stderr
 
     def _execute_script_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str]:

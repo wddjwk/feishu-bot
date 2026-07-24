@@ -174,7 +174,13 @@ class MessageHandler(BaseHandler):
                         result_text = delivery.text
                         if delivery.errors:
                             result_text = "\n".join([result_text, *[f"文件交付失败：{error}" for error in delivery.errors]]).strip()
-                        card = cards.build_ai_card(result.tool, result.model, result_text or "任务已完成。", result.thinking)
+                        card = cards.build_ai_card(
+                            result.tool,
+                            result.model,
+                            result_text or "任务已完成。",
+                            result.thinking,
+                            usage=result.usage if self.config.get("features.show_token_usage_on_card", True) else None,
+                        )
                         try:
                             reply = self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
                         except FeishuApiError:
