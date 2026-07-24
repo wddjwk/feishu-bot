@@ -29,7 +29,7 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 
 `PromptBuilder` 负责富消息解析、回复链/群话题上下文、附件下载和最小 JSON prompt。私聊话题依赖 CLI 会话恢复；群话题还需补充未 @ 机器人的群内消息上下文。
 
-`AIRunner` 是 CLI 适配层：依据配置组装命令、注入模型环境变量、管理进程与超时、解析输出并记录关键日志。正常消息的 `--session-id` 由服务生成 UUID；话题使用持久化会话 ID 的 `--resume`。
+`AIRunner` 是 CLI 适配层：依据配置组装命令、注入模型环境变量、管理进程与超时、解析输出并记录关键日志。输出解析采用类注册机制——`BaseOutputParser` 处理公共逻辑（事件迭代、错误检测、结果拼装），各 CLI 子类（Claude、Pi、Copilot）按协议差异提取思考、工具调用、token 用量和最终回复，统一产出 `AIResult`。新增 CLI 只需在 `ai_runner.py` 添加 parser 子类并在 `config.json` 注册。正常消息的 `--session-id` 由服务生成 UUID；话题使用持久化会话 ID 的 `--resume`。
 
 ## 消息与文件
 
@@ -41,10 +41,10 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 
 ## 状态、配置与命令
 
-- `config.json`：飞书、服务、日志、工作目录、lark-cli 与各 CLI 的启动参数。
+- `config.json`：飞书、服务、日志、工作目录、lark-cli 与各 CLI 的启动参数；`features` 节控制功能开关（如 `show_token_usage_on_card`）。
 - `model.json`：默认 CLI、每个 CLI 的默认模型、模型列表、别名和环境变量。
 - `/reload` 热加载两份配置，但保留当前进程内通过 `/cli`、`/model` 做出的选择；重启后恢复配置默认值。
-- `cards.py` 统一管理 Card JSON 2.0；卡片宽度和工具图标由配置控制。
+- `cards.py` 统一管理 Card JSON 2.0；卡片结构为标题（工具图标+模型名）、正文（Markdown，长代码块自动折叠）、token 用量（状态栏风格小字）、分析过程折叠块。卡片宽度和工具图标由配置控制。
 - 用户命令仅维护 `/help`、`/running`、`/kill`、`/timer`、`/timer-rm`、`/reload`、`/status`、`/cli`、`/model`。
 - `data/session_map.json` 保存会话与飞书消息/话题关联；它是可清理的运行数据，不是业务数据库。
 
