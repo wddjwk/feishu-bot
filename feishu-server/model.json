@@ -2,10 +2,10 @@
   "default_cli": "codebuddy",
   "tools": {
     "qoder": {
-      "default_model": "DeepSeek-V4-Flash",
-      "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Qwen3.8-Max", "Qwen3.7-Max", "GLM-5.2", "Kimi-K3"],
+      "default_model": "Qwen3.8-Max-preview",
+      "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Qwen3.8-Max-preview", "Qwen3.7-Max", "GLM-5.2", "Kimi-K3"],
       "aliases": {
-        "default": "Qwen3.7-Max",
+        "default": "Qwen3.8-Max-preview",
         "max": "GLM-5.2",
         "middle": "Qwen3.7-Max",
         "min": "DeepSeek-V4-Flash"
@@ -14,10 +14,10 @@
     },
     "claude": {
       "default_model": "deepseek-v4-flash",
-      "model_list": ["deepseek-v4-flash", "deepseek-v4"],
+      "model_list": ["deepseek-v4-flash", "deepseek-v4-pro"],
       "aliases": {
         "default": "deepseek-v4-flash",
-        "max": "deepseek-v4",
+        "max": "deepseek-v4-pro",
         "middle": "deepseek-v4-flash",
         "min": "deepseek-v4-flash"
       },
@@ -25,7 +25,7 @@
     },
     "copilot": {
       "default_model": "claude-sonnet-5",
-      "model_list": ["claude-haiku-4.5", "claude-sonnet-5", "claude-opus-4.8", "gpt-5.6-luna"],
+      "model_list": ["claude-haiku-4.5", "claude-sonnet-5", "claude-opus-4.8", "gpt-5.6-luna", "gpt-5.6-sol"],
       "aliases": {
         "default": "claude-sonnet-5",
         "max": "claude-opus-4.8",
@@ -47,10 +47,10 @@
     },
     "pi": {
       "default_model": "deepseek-v4-flash",
-      "model_list": [ "deepseek-v4-flash", "deepseek-v4" ],
+      "model_list": [ "deepseek-v4-flash", "deepseek-v4-pro" ],
       "aliases": {
         "default": "deepseek-v4-flash",
-        "max": "deepseek-v4",
+        "max": "deepseek-v4-pro",
         "middle": "deepseek-v4-flash",
         "min": "deepseek-v4-flash"
       },
