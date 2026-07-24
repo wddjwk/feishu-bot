@@ -55,7 +55,7 @@ class CardTests(unittest.TestCase):
         self.assertIn("ID：`daily`", content)
 
 
-class UsageSuffixTests(unittest.TestCase):
+class UsageElementTests(unittest.TestCase):
     def setUp(self):
         cards.configure_tool_icons({"codebuddy": "🐇"})
         self.addCleanup(cards.configure_tool_icons, {})
@@ -75,28 +75,58 @@ class UsageSuffixTests(unittest.TestCase):
         self.assertEqual(cards._format_count(1_500_000), "1.5M")
         self.assertEqual(cards._format_count(10_000_000), "10M")
 
-    def test_format_usage_suffix_empty_cases(self):
-        self.assertEqual(cards._format_usage_suffix(None), "")
+    def test_usage_element_empty_cases(self):
+        self.assertIsNone(cards._usage_element(None))
         from services.ai_runner import TokenUsage
-        self.assertEqual(cards._format_usage_suffix(TokenUsage()), "")
-        self.assertEqual(cards._format_usage_suffix(TokenUsage(0, 0, 0)), "")
+        self.assertIsNone(cards._usage_element(TokenUsage()))
+        self.assertIsNone(cards._usage_element(TokenUsage(0, 0, 0)))
 
-    def test_format_usage_suffix_formats(self):
+    def test_usage_element_shows_only_nonzero(self):
         from services.ai_runner import TokenUsage
-        self.assertEqual(cards._format_usage_suffix(TokenUsage(500, 0, 200)), "500↑/0/200↓")
-        self.assertEqual(cards._format_usage_suffix(TokenUsage(18928, 0, 27)), "19K↑/0/27↓")
-        self.assertEqual(cards._format_usage_suffix(TokenUsage(27065, 18513, 46)), "27K↑/19K/46↓")
+        el = cards._usage_element(TokenUsage(500, 0, 200))
+        self.assertEqual(el["tag"], "markdown")
+        self.assertEqual(el["text_size"], "small")
+        self.assertIn("↑ 500", el["content"])
+        self.assertNotIn("⬢", el["content"])
+        self.assertIn("↓ 200", el["content"])
 
-    def test_build_ai_card_with_usage(self):
+    def test_usage_element_all_fields(self):
+        from services.ai_runner import TokenUsage
+        el = cards._usage_element(TokenUsage(27065, 18513, 46))
+        self.assertIn("↑ 27K", el["content"])
+        self.assertIn("⬢ 19K", el["content"])
+        self.assertIn("↓ 46", el["content"])
+
+    def test_build_ai_card_with_usage_in_body(self):
         from services.ai_runner import TokenUsage
         card = cards.build_ai_card(
-            "codebuddy", "deepseek-v4-flash", "OK", "",
+            "codebuddy", "deepseek-v4-flash", "OK", "thinking",
             usage=TokenUsage(18928, 0, 27),
         )
         self.assertEqual(
             card["header"]["title"]["content"],
-            "🐇Codebuddy deepseek-v4-flash | 19K↑/0/27↓",
+            "🐇Codebuddy deepseek-v4-flash",
         )
+        elements = card["body"]["elements"]
+        hr_idx = next(i for i, e in enumerate(elements) if e.get("tag") == "hr")
+        usage_el = elements[hr_idx + 1]
+        self.assertEqual(usage_el["tag"], "markdown")
+        self.assertEqual(usage_el["text_size"], "small")
+        self.assertIn("↑ 19K", usage_el["content"])
+        self.assertIn("↓ 27", usage_el["content"])
+
+    def test_build_ai_card_usage_without_thinking(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card(
+            "codebuddy", "deepseek-v4-flash", "OK", "",
+            usage=TokenUsage(500, 100, 200),
+        )
+        elements = card["body"]["elements"]
+        hr_idx = next(i for i, e in enumerate(elements) if e.get("tag") == "hr")
+        usage_el = elements[hr_idx + 1]
+        self.assertIn("↑ 500", usage_el["content"])
+        self.assertIn("⬢ 100", usage_el["content"])
+        self.assertIn("↓ 200", usage_el["content"])
 
     def test_build_ai_card_without_usage_backward_compat(self):
         card = cards.build_ai_card("codebuddy", "deepseek-v4-flash", "OK")

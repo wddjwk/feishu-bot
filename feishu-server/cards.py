@@ -219,31 +219,33 @@ def plain_text_elements(content: str, *, text_color: str = "default") -> list[di
     ]
 
 
-def _thinking_elements(thinking_text: str) -> list[dict[str, Any]]:
+def _thinking_elements(thinking_text: str, usage: "TokenUsage | None" = None) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = [{"tag": "hr"}]
+    usage_el = _usage_element(usage)
+    if usage_el:
+        elements.append(usage_el)
     thinking_title = f"分析过程 ({len(thinking_text)}字)"
-    return [
-        {"tag": "hr"},
-        {
-            "tag": "collapsible_panel",
-            "expanded": False,
-            "header": {
-                "title": {"tag": "plain_text", "content": thinking_title},
-                "vertical_align": "center",
-                "icon": {
-                    "tag": "standard_icon",
-                    "token": "down-small-ccm_outlined",
-                    "color": "",
-                    "size": "16px 16px",
-                },
-                "icon_position": "right",
-                "icon_expanded_angle": -180,
+    elements.append({
+        "tag": "collapsible_panel",
+        "expanded": False,
+        "header": {
+            "title": {"tag": "plain_text", "content": thinking_title},
+            "vertical_align": "center",
+            "icon": {
+                "tag": "standard_icon",
+                "token": "down-small-ccm_outlined",
+                "color": "",
+                "size": "16px 16px",
             },
-            "border": {"color": "grey", "corner_radius": "5px"},
-            "vertical_spacing": "8px",
-            "padding": "8px 8px 8px 8px",
-            "elements": plain_text_elements(thinking_text),
+            "icon_position": "right",
+            "icon_expanded_angle": -180,
         },
-    ]
+        "border": {"color": "grey", "corner_radius": "5px"},
+        "vertical_spacing": "8px",
+        "padding": "8px 8px 8px 8px",
+        "elements": plain_text_elements(thinking_text),
+    })
+    return elements
 
 
 def _card_bytes(card: dict[str, Any]) -> int:
@@ -264,30 +266,36 @@ def _format_count(n: int | None) -> str:
     return f"{value:.1f}M" if rounded < 10 else f"{rounded}M"
 
 
-def _format_usage_suffix(usage: "TokenUsage | None") -> str:
-    """格式化 token 用量为 "read↑/cache/write↓"。任一分量有值才输出。"""
+def _usage_element(usage: "TokenUsage | None") -> dict[str, Any] | None:
+    """Build a compact token-usage element for the card footer (statusline style)."""
     if usage is None:
-        return ""
+        return None
     input_t = getattr(usage, "input_tokens", None)
     cached_t = getattr(usage, "cached_tokens", None)
     output_t = getattr(usage, "output_tokens", None)
-    if not any(isinstance(v, int) and v > 0 for v in (input_t, cached_t, output_t)):
-        return ""
-    read = _format_count(input_t)
-    cache = _format_count(cached_t)
-    write = _format_count(output_t)
-    return f"{read}↑/{cache}/{write}↓"
+    parts: list[str] = []
+    if isinstance(input_t, int) and input_t > 0:
+        parts.append("↑ " + _format_count(input_t))
+    if isinstance(cached_t, int) and cached_t > 0:
+        parts.append("⬢ " + _format_count(cached_t))
+    if isinstance(output_t, int) and output_t > 0:
+        parts.append("↓ " + _format_count(output_t))
+    if not parts:
+        return None
+    return {
+        "tag": "markdown",
+        "content": "  ·  ".join(parts),
+        "text_size": "small",
+    }
 
 
 def build_ai_card(tool: str, model: str, result: str, thinking: str = "", usage: "TokenUsage | None" = None) -> dict[str, Any]:
     display_tool = tool.capitalize()
     title = f"{_tool_icons.get(tool, '🤖')}{display_tool} {model}"
-    suffix = _format_usage_suffix(usage)
-    if suffix:
-        title = f"{title} | {suffix}"
     result = _limit_text(result, 10_000)
     elements = markdown_elements(result)
     thinking_text = thinking.strip()
+    usage_el = _usage_element(usage)
 
     if thinking_text:
         probe = _base_card(title, "blue", list(elements), summary=_truncate(result.replace("\n", " "), 100))
@@ -295,7 +303,10 @@ def build_ai_card(tool: str, model: str, result: str, thinking: str = "", usage:
         budget = min(int(MAX_CARD_BYTES * THINKING_RATIO), MAX_CARD_BYTES - result_bytes - 512)
         if budget > 0:
             truncated_thinking = _truncate_front(thinking_text, budget)
-            elements.extend(_thinking_elements(truncated_thinking))
+            elements.extend(_thinking_elements(truncated_thinking, usage))
+    elif usage_el:
+        elements.append({"tag": "hr"})
+        elements.append(usage_el)
 
     card = _base_card(title, "blue", elements, summary=_truncate(result.replace("\n", " "), 100))
 
@@ -306,7 +317,7 @@ def build_ai_card(tool: str, model: str, result: str, thinking: str = "", usage:
         budget = MAX_CARD_BYTES - result_bytes - 1024
         if budget > 0:
             truncated_thinking = _truncate_front(thinking_text, budget)
-            elements.extend(_thinking_elements(truncated_thinking))
+            elements.extend(_thinking_elements(truncated_thinking, usage))
         card = _base_card(title, "blue", elements, summary=_truncate(result.replace("\n", " "), 100))
 
     return card
