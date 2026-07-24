@@ -9,6 +9,7 @@ MARKDOWN_CHUNK_CHARS = 18_000
 PLAIN_TEXT_CHUNK_CHARS = 9_000
 MAX_CARD_BYTES = 30 * 1024
 THINKING_RATIO = 0.75
+CODE_COLLAPSE_LINES = 20
 CARD_WIDTHS = {"half", "full"}
 _card_width = "half"
 _tool_icons: dict[str, str] = {}
@@ -75,6 +76,44 @@ def normalize_markdown(markdown: str) -> str:
     return "\n".join(lines).strip() or "（无内容）"
 
 
+def _split_code_segments(markdown: str) -> list[tuple[str, ...]]:
+    """Split markdown into ordered ("text", content) / ("code", fenced, lang, lines) segments."""
+    segments: list[tuple[str, ...]] = []
+    text_buf: list[str] = []
+    code_buf: list[str] = []
+    fence_len = 0
+    lang = ""
+    in_code = False
+
+    def flush_text() -> None:
+        content = "\n".join(text_buf).strip()
+        if content:
+            segments.append(("text", content))
+        text_buf.clear()
+
+    for line in markdown.split("\n"):
+        stripped = line.strip()
+        if in_code:
+            code_buf.append(line)
+            if re.match(r"^`{3,}$", stripped) and len(stripped) >= fence_len:
+                in_code = False
+                segments.append(("code", "\n".join(code_buf), lang, len(code_buf) - 2))
+                code_buf = []
+        elif stripped.startswith("```"):
+            flush_text()
+            in_code = True
+            fence_len = len(stripped) - len(stripped.lstrip("`"))
+            lang = stripped.lstrip("`").strip()
+            code_buf = [line]
+        else:
+            text_buf.append(line)
+
+    if in_code and code_buf:
+        segments.append(("text", "\n".join(code_buf).strip()))
+    flush_text()
+    return segments
+
+
 def _base_card(title: str, template: str, elements: list[dict[str, Any]], summary: str | None = None) -> dict[str, Any]:
     config: dict[str, Any] = {
         "update_multi": True,
@@ -109,15 +148,45 @@ def markdown_element(content: str) -> dict[str, Any]:
     }
 
 
+def _code_collapsible(fenced: str, lang: str, num_lines: int) -> dict[str, Any]:
+    title = f"{lang} 代码（{num_lines}行）" if lang else f"代码（{num_lines}行）"
+    return {
+        "tag": "collapsible_panel",
+        "expanded": False,
+        "header": {
+            "title": {"tag": "plain_text", "content": title},
+            "vertical_align": "center",
+            "icon": {
+                "tag": "standard_icon",
+                "token": "down-small-ccm_outlined",
+                "color": "",
+                "size": "16px 16px",
+            },
+            "icon_position": "right",
+            "icon_expanded_angle": -180,
+        },
+        "border": {"color": "grey", "corner_radius": "5px"},
+        "vertical_spacing": "8px",
+        "padding": "8px 8px 8px 8px",
+        "elements": [
+            {"tag": "markdown", "content": fenced, "text_size": "normal"},
+        ],
+    }
+
+
 def markdown_elements(content: str) -> list[dict[str, Any]]:
-    return [
-        {
-            "tag": "markdown",
-            "content": chunk,
-            "text_size": "normal",
-        }
-        for chunk in _chunks(normalize_markdown(content), MARKDOWN_CHUNK_CHARS)
-    ]
+    elements: list[dict[str, Any]] = []
+    for segment in _split_code_segments(content):
+        if segment[0] == "text":
+            for chunk in _chunks(normalize_markdown(segment[1]), MARKDOWN_CHUNK_CHARS):
+                elements.append({"tag": "markdown", "content": chunk, "text_size": "normal"})
+        else:
+            _, fenced, lang, num_lines = segment
+            if num_lines > CODE_COLLAPSE_LINES:
+                elements.append(_code_collapsible(fenced, lang, num_lines))
+            else:
+                elements.append({"tag": "markdown", "content": fenced, "text_size": "normal"})
+    return elements or [{"tag": "markdown", "content": "（无内容）", "text_size": "normal"}]
 
 
 def plain_text_element(content: str, *, text_color: str = "default") -> dict[str, Any]:
