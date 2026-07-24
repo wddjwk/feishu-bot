@@ -483,5 +483,45 @@ class ParserRegistryTests(unittest.TestCase):
         self.assertEqual(CodeBuddyParser().parse(claude_stdout, "").result, "x")
 
 
+class InlineThinkingTests(unittest.TestCase):
+    """验证模型把 reasoning 内联在正文 text 时，能被抽成 thinking 流。"""
+
+    def test_claude_result_strips_think_tag(self):
+        stdout = '{"type":"result","result":"<think>step 1</think>ok"}\n'
+        result = parse_output("claude-stream-json", stdout)
+        self.assertEqual(result.result, "ok")
+        self.assertIn("step 1", result.thinking)
+
+    def test_claude_result_strips_thinking_tag(self):
+        stdout = '{"type":"result","result":"<thinking>step 1</thinking>ok"}\n'
+        result = parse_output("claude-stream-json", stdout)
+        self.assertEqual(result.result, "ok")
+        self.assertIn("step 1", result.thinking)
+
+    def test_pi_turn_end_strips_think_tag(self):
+        stdout = '{"type":"turn_end","message":{"stopReason":"stop","content":[{"type":"text","text":"<think>step 1</think>ok"}]}}\n'
+        result = parse_output("pi-json", stdout)
+        self.assertEqual(result.result, "ok")
+        self.assertIn("step 1", result.thinking)
+
+    def test_pi_text_delta_strips_think_tag(self):
+        stdout = (
+            '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"<think>step 1</think>ok"}}\n'
+            '{"type":"turn_end","message":{"stopReason":"stop","content":[]}}\n'
+        )
+        result = parse_output("pi-json", stdout)
+        self.assertEqual(result.result, "ok")
+        self.assertIn("step 1", result.thinking)
+
+    def test_claude_assistant_text_strips_inline_thinking(self):
+        stdout = (
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"<think>reasoning</think>answer"}]}}\n'
+            '{"type":"result","result":"ok"}\n'
+        )
+        result = parse_output("claude-stream-json", stdout)
+        self.assertEqual(result.result, "ok")
+        self.assertIn("reasoning", result.thinking)
+
+
 if __name__ == "__main__":
     unittest.main()

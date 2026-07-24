@@ -476,7 +476,7 @@ class ClaudeParser(BaseOutputParser):
             if thinking_text:
                 ctx.thinking_parts.append(thinking_text)
             if body_text:
-                ctx.content_parts.append(body_text)
+                ctx.content_parts.append(_strip_inline_thinking(ctx, body_text))
             return
         if _dispatch_process_event(ctx, event, event_type):
             return
@@ -546,7 +546,7 @@ class PiParser(BaseOutputParser):
             elif inner_type == "text_delta":
                 delta = inner.get("delta")
                 if isinstance(delta, str) and delta:
-                    ctx.content_delta_parts.append(delta)
+                    ctx.content_delta_parts.append(_strip_inline_thinking(ctx, delta))
             # thinking_start/delta, text_start, toolcall_start/delta: skipped
             # (turn_end carries the complete content blocks — see class docstring)
             return
@@ -583,10 +583,12 @@ class PiParser(BaseOutputParser):
                         elif block_type == "text":
                             text = block.get("text") or ""
                             if text:
-                                if is_final:
-                                    ctx.result_parts.append(text)
-                                else:
-                                    ctx.thinking_parts.append(text)
+                                clean = _strip_inline_thinking(ctx, text)
+                                if clean:
+                                    if is_final:
+                                        ctx.result_parts.append(clean)
+                                    else:
+                                        ctx.thinking_parts.append(clean)
                         # toolCall blocks skipped — duplicate toolcall_end events
             return
         # agent_end / agent_settled / message_start / message_end / turn_start: no-op
@@ -737,7 +739,7 @@ def _dispatch_result(ctx: _ParseContext, event: dict[str, Any], event_type: str)
     if not isinstance(text, str) or not text.strip():
         text = _extract_text(event)
     if text and text.strip():
-        ctx.result_parts.append(text.strip())
+        ctx.result_parts.append(_strip_inline_thinking(ctx, text.strip()))
     return True
 
 
@@ -774,6 +776,28 @@ def _split_assistant_content(event: dict[str, Any]) -> tuple[str, str]:
             if text:
                 text_parts.append(text)
     return "\n\n".join(process_parts), "\n".join(text_parts)
+
+
+_THINKING_INLINE_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>", re.DOTALL)
+
+
+def _strip_inline_thinking(ctx: _ParseContext, text: str) -> str:
+    """把模型直接写在正文 text 里的 <think>/<thinking> 抽成 thinking 流，返回干净正文。
+
+    主要用于 fuyao-mimo / Claude 等把 reasoning 内联在 text content 里的模型；普通 text 不受影响。
+    """
+    if "<think" not in text:
+        return text
+    clean_parts: list[str] = []
+    last = 0
+    for match in _THINKING_INLINE_RE.finditer(text):
+        clean_parts.append(text[last:match.start()])
+        thinking = match.group(1).strip()
+        if thinking:
+            ctx.thinking_parts.append(f"🧠 Thinking\n{thinking}")
+        last = match.end()
+    clean_parts.append(text[last:])
+    return "".join(clean_parts).strip()
 
 
 def _fallback_result(parts: list[str]) -> str:
