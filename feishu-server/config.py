@@ -63,6 +63,49 @@ def _strip_comments(text: str) -> str:
         elif ch == "/" and i + 1 < n and text[i + 1] == "/":
             while i < n and text[i] != "\n":
                 i += 1
+        elif ch == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i < n:
+                if i + 1 < n and text[i] == "*" and text[i + 1] == "/":
+                    i += 2
+                    break
+                i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _strip_trailing_commas(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escape = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+        elif ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+        elif ch == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+            out.append(ch)
+            i += 1
         else:
             out.append(ch)
             i += 1
@@ -75,7 +118,7 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as fh:
             raw = fh.read()
-        data = json.loads(_strip_comments(raw))
+        data = json.loads(_strip_trailing_commas(_strip_comments(raw)))
     except json.JSONDecodeError as exc:
         raise ConfigError(f"{label} 不是有效 JSON：{exc}") from exc
     if not isinstance(data, dict):

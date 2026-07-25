@@ -169,6 +169,63 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.default_model("claude"), "https://example.com/model")
 
+    def test_config_json_supports_block_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base.json"
+            base.write_text(
+                '{\n'
+                '  /* config */\n'
+                '  "ai": {\n'
+                '    "default_tool": "claude", /* default */\n'
+                '    "tools": {\n'
+                '      "claude": {\n'
+                '        "command": "claude",\n'
+                '        "base_args": [],\n'
+                '        "prompt_transport": "stdin",\n'
+                '        "output_parser": "claude-stream-json",\n'
+                '        "default_model": "m",\n'
+                '        "model_list": ["m"],\n'
+                '        "aliases": {},\n'
+                '        "env": {}\n'
+                '      }\n'
+                '    }\n'
+                '  }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+
+            config = Config(path=base)
+
+        self.assertEqual(config.default_model("claude"), "m")
+
+    def test_config_json_supports_trailing_commas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base.json"
+            base.write_text(
+                '{\n'
+                '  "ai": {\n'
+                '    "default_tool": "claude",\n'
+                '    "tools": {\n'
+                '      "claude": {\n'
+                '        "command": "claude",\n'
+                '        "base_args": [],\n'
+                '        "prompt_transport": "stdin",\n'
+                '        "output_parser": "claude-stream-json",\n'
+                '        "default_model": "m",\n'
+                '        "model_list": ["m",],\n'
+                '        "aliases": {"max": "m",},\n'
+                '        "env": {},\n'
+                '      },\n'
+                '    },\n'
+                '  },\n'
+                '}\n',
+                encoding="utf-8",
+            )
+
+            config = Config(path=base)
+
+        self.assertEqual(config.default_model("claude"), "m")
+
 
 if __name__ == "__main__":
     unittest.main()
