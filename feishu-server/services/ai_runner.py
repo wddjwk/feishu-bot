@@ -75,13 +75,10 @@ class ToolSpec:
         command = str(raw.get("command") or name).strip()
         if not command:
             raise ConfigError(f"AI 工具 {name} 缺少 command")
-        base_args = cls._args(raw.get("base_args", raw.get("args", [])), name, "base_args")
+        base_args = cls._args(raw.get("base_args", []), name, "base_args")
         session_args = cls._args(raw.get("session_args", []), name, "session_args")
         resume_args = cls._args(raw.get("resume_args", []), name, "resume_args")
-        transport = raw.get("prompt_transport")
-        if transport is None:
-            transport = "stdin" if bool(raw.get("stdin", True)) else "argument"
-        prompt_transport = str(transport)
+        prompt_transport = str(raw.get("prompt_transport") or "stdin")
         if prompt_transport not in {"stdin", "argument"}:
             raise ConfigError(f"AI 工具 {name} 的 prompt_transport 必须为 stdin 或 argument")
         output_parser = str(raw.get("output_parser") or "claude-stream-json")
@@ -741,6 +738,93 @@ class CopilotParser(BaseOutputParser):
         _dispatch_result(ctx, event, event_type)
 
 
+class CodexParser(BaseOutputParser):
+    """解析 Codex CLI 的 --json JSONL 输出。
+
+    事件协议：
+      - thread.started：thread_id 为会话 ID
+      - turn.started：结构事件，无 payload
+      - item.started：命令执行开始（status=in_progress），内容与 item.completed 重复，跳过
+      - item.completed：
+        - type=reasoning：item.text 为模型推理/思考过程
+        - type=agent_message：item.text 为 Agent 消息。一次 turn 内可能有多条
+          （工具调用前的"我来查一下"、工具调用间的进度播报、最终完整回答）。
+          仅最后一条作为最终回复，其余归入思考流。
+        - type=command_execution：command + aggregated_output 为工具调用过程
+        - type=error：item.message 为非致命警告（如模型元数据缺失），不标记 saw_error
+      - turn.completed：usage 含 input_tokens / cached_input_tokens / output_tokens / reasoning_output_tokens
+    """
+
+    name = "codex-json"
+
+    def parse(self, stdout: str, stderr: str) -> AIResult:
+        self._agent_messages: list[str] = []
+        return super().parse(stdout, stderr)
+
+    @staticmethod
+    def _collect_common(ctx: "_ParseContext", event: dict[str, Any]) -> None:
+        if "__plain_text__" in event:
+            text = event["__plain_text__"]
+            if not text.startswith("Reading additional input from stdin"):
+                ctx.content_parts.append(text)
+            return
+
+    def _handle_event(self, ctx: "_ParseContext", event: dict[str, Any], event_type: str) -> None:
+        if event_type == "thread.started":
+            tid = event.get("thread_id")
+            if isinstance(tid, str) and tid:
+                ctx.session_id = ctx.session_id or tid
+            return
+        if event_type == "turn.completed":
+            _merge_usage(ctx.usage, _extract_usage(event))
+            self._distribute_agent_messages(ctx)
+            return
+        if event_type == "item.completed":
+            item = event.get("item")
+            if not isinstance(item, dict):
+                return
+            item_type = str(item.get("type") or "").lower()
+            if item_type == "agent_message":
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    self._agent_messages.append(_strip_inline_thinking(ctx, text))
+            elif item_type == "reasoning":
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    ctx.thinking_parts.append(ThoughtPart("thinking", text=text))
+            elif item_type == "command_execution":
+                command = item.get("command") or ""
+                output = item.get("aggregated_output") or ""
+                exit_code = item.get("exit_code")
+                is_error = exit_code is not None and exit_code != 0
+                if command:
+                    ctx.thinking_parts.append(ThoughtPart("command", text=str(command)))
+                if output and output.strip():
+                    ctx.thinking_parts.append(ThoughtPart("command_result", text=output.rstrip(), is_error=is_error))
+                elif is_error:
+                    ctx.thinking_parts.append(ThoughtPart("command_result", text=f"exit code: {exit_code}", is_error=True))
+            elif item_type == "error":
+                message = item.get("message")
+                if isinstance(message, str) and message:
+                    ctx.thinking_parts.append(ThoughtPart("warning", text=message))
+            return
+        # item.started / turn.started: no-op
+
+    def _finalize(self, ctx: "_ParseContext", stderr: str) -> AIResult:
+        if self._agent_messages and not ctx.result_parts:
+            self._distribute_agent_messages(ctx)
+        return super()._finalize(ctx, stderr)
+
+    def _distribute_agent_messages(self, ctx: "_ParseContext") -> None:
+        if not self._agent_messages:
+            return
+        ctx.result_parts.append(self._agent_messages[-1])
+        for msg in self._agent_messages[:-1]:
+            if msg.strip():
+                ctx.thinking_parts.append(ThoughtPart("agent", text=msg))
+        self._agent_messages.clear()
+
+
 @dataclass
 class _ParseContext:
     usage: TokenUsage = field(default_factory=TokenUsage)
@@ -1037,6 +1121,18 @@ def _render_part(part: ThoughtPart, limit: int) -> str:
         if not text:
             return ""
         return f"📎 Tool partial\n{text}"
+    if part.kind == "command" and part.text:
+        return f"🛠 Command\n{part.text}"
+    if part.kind == "command_result":
+        text = _truncate(part.text, limit)
+        if not text:
+            return ""
+        label = "📎 Command result (error)" if part.is_error else "📎 Command result"
+        return f"{label}\n{text}"
+    if part.kind == "warning" and part.text:
+        return f"⚠️ Error\n{part.text}"
+    if part.kind == "agent" and part.text:
+        return f"💬 Agent\n{part.text}"
     if part.kind == "text" and part.text:
         return part.text
     return ""
@@ -1113,10 +1209,11 @@ def _extract_usage(event: dict[str, Any]) -> TokenUsage:
     candidate_keys = (
         "input_tokens", "prompt_tokens", "inputTokens", "input",
         "output_tokens", "completion_tokens", "outputTokens", "output",
-        "cached_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+        "cached_tokens", "cache_read_input_tokens", "cached_input_tokens", "cache_creation_input_tokens",
+        "cacheWriteInputTokens", "cache_write_input_tokens",
         "cacheReadInputTokens", "cacheCreationInputTokens",
         "cacheRead", "cacheWrite",
-        "reasoning",
+        "reasoning", "reasoning_output_tokens",
     )
     while stack:
         current = stack.pop()
@@ -1138,12 +1235,12 @@ def _extract_usage(event: dict[str, Any]) -> TokenUsage:
 
     input_t = take(("input_tokens", "prompt_tokens", "inputTokens", "input"))
     output_t = take(("output_tokens", "completion_tokens", "outputTokens", "output"))
-    reasoning_t = take(("reasoning",))
+    reasoning_t = take(("reasoning", "reasoning_output_tokens"))
     cache_read = take((
-        "cached_tokens", "cache_read_input_tokens", "cacheReadInputTokens", "cacheRead",
+        "cached_tokens", "cache_read_input_tokens", "cached_input_tokens", "cacheReadInputTokens", "cacheRead",
     ))
     cache_write = take((
-        "cache_creation_input_tokens", "cacheCreationInputTokens", "cacheWrite",
+        "cache_creation_input_tokens", "cacheWriteInputTokens", "cache_write_input_tokens", "cacheWrite",
     ))
     # When read and creation are both present in the same usage object they refer to
     # disjoint portions of the same cache budget (not additive). Take the larger so the

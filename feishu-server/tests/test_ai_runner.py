@@ -9,6 +9,7 @@ from services.ai_runner import (
     BaseOutputParser,
     ClaudeParser,
     CodeBuddyParser,
+    CodexParser,
     CopilotParser,
     PiParser,
     QoderCliParser,
@@ -46,6 +47,150 @@ class ParseOutputTests(unittest.TestCase):
         self.assertIn("📚 Skill scheduler", format_thinking(result.parts))
         self.assertIn("🛠 Tool bash", format_thinking(result.parts))
         self.assertEqual(result.result, "ok")
+
+    def test_codex_parses_agent_message_and_usage(self):
+        stdout = "\n".join(
+            [
+                "Reading additional input from stdin...",
+                '{"type":"thread.started","thread_id":"tid-123"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"hello world"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":53927,"cached_input_tokens":37120,"output_tokens":2914,"reasoning_output_tokens":0}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.session_id, "tid-123")
+        self.assertEqual(result.result, "hello world")
+        self.assertEqual(result.usage.input_tokens, 53927)
+        self.assertEqual(result.usage.cached_tokens, 37120)
+        self.assertEqual(result.usage.output_tokens, 2914)
+
+    def test_codex_command_execution_rendering(self):
+        stdout = "\n".join(
+            [
+                '{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"ls -la","aggregated_output":"","exit_code":null,"status":"in_progress"}}',
+                '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"ls -la","aggregated_output":"file.txt\\n","exit_code":0,"status":"completed"}}',
+                '{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"done"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result, "done")
+        self.assertIn("🛠 Command\nls -la", format_thinking(result.parts))
+        self.assertIn("📎 Command result\nfile.txt", format_thinking(result.parts))
+
+    def test_codex_error_is_warning_not_failure(self):
+        stdout = "\n".join(
+            [
+                '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}',
+                '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"still works"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result, "still works")
+        self.assertIn("⚠️ Error\nModel metadata not found", format_thinking(result.parts))
+
+    def test_codex_skips_reading_stdin_message(self):
+        stdout = "\n".join(
+            [
+                "Reading additional input from stdin...",
+                '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"reply"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result, "reply")
+
+    def test_codex_intermediate_messages_go_to_thinking(self):
+        stdout = "\n".join(
+            [
+                '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"let me check"}}',
+                '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"got it"}}',
+                '{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"final answer"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result, "final answer")
+        self.assertIn("💬 Agent\nlet me check", format_thinking(result.parts))
+        self.assertIn("💬 Agent\ngot it", format_thinking(result.parts))
+
+    def test_codex_real_world_multi_message_flow(self):
+        stdout = "\n".join(
+            [
+                "Reading additional input from stdin...",
+                '{"type":"thread.started","thread_id":"tid-abc"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata not found"}}',
+                '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"我来查一下天气"}}',
+                '{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"curl wttr.in","aggregated_output":"","exit_code":null,"status":"in_progress"}}',
+                '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"curl wttr.in","aggregated_output":"sunny","exit_code":0,"status":"completed"}}',
+                '{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"拿到数据了，下面是结果"}}',
+                '{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"广州今天晴天，36°C"}}',
+                '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":200,"reasoning_output_tokens":10}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.session_id, "tid-abc")
+        self.assertEqual(result.result, "广州今天晴天，36°C")
+        self.assertIn("💬 Agent\n我来查一下天气", format_thinking(result.parts))
+        self.assertIn("💬 Agent\n拿到数据了，下面是结果", format_thinking(result.parts))
+        self.assertIn("🛠 Command\ncurl wttr.in", format_thinking(result.parts))
+        self.assertIn("📎 Command result\nsunny", format_thinking(result.parts))
+        self.assertIn("⚠️ Error\nModel metadata not found", format_thinking(result.parts))
+        self.assertEqual(result.usage.input_tokens, 100)
+        self.assertEqual(result.usage.cached_tokens, 50)
+        self.assertEqual(result.usage.output_tokens, 210)
+
+    def test_codex_reasoning_goes_to_thinking(self):
+        stdout = "\n".join(
+            [
+                '{"type":"item.completed","item":{"id":"item_1","type":"reasoning","text":"let me think about this"}}',
+                '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"answer"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result, "answer")
+        self.assertIn("🧠 Thinking\nlet me think about this", format_thinking(result.parts))
+
+    def test_codex_failed_command_exit_code(self):
+        stdout = "\n".join(
+            [
+                '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"false","aggregated_output":"","exit_code":1,"status":"completed"}}',
+                '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"ok"}}',
+            ]
+        )
+        result = parse_output("codex-json", stdout)
+        self.assertTrue(result.ok)
+        self.assertIn("📎 Command result (error)", format_thinking(result.parts))
+
+    def test_codex_new_session_has_no_session_args_and_resume_uses_subcommand(self):
+        class FakeConfig:
+            def tool_config(self, _tool):
+                return {
+                    "command": "codex",
+                    "base_args": ["exec", "--json", "--model", "{model}", "--dangerously-bypass-approvals-and-sandbox"],
+                    "resume_args": ["resume", "{session_id}"],
+                    "prompt_transport": "stdin",
+                    "output_parser": "codex-json",
+                }
+
+        runner = AIRunner(FakeConfig())
+        self.assertFalse(runner.supports_explicit_session("codex"))
+        new_command = runner._build_command("codex", "gpt-5.6-sol", None, None)
+        resume_command = runner._build_command("codex", "gpt-5.6-sol", None, "existing-session")
+        self.assertEqual(
+            new_command,
+            ["codex", "exec", "--json", "--model", "gpt-5.6-sol", "--dangerously-bypass-approvals-and-sandbox"],
+        )
+        self.assertEqual(
+            resume_command,
+            ["codex", "exec", "--json", "--model", "gpt-5.6-sol", "--dangerously-bypass-approvals-and-sandbox", "resume", "existing-session"],
+        )
 
     def test_copilot_reasoning_delta_not_duplicated(self):
         stdout = "\n".join(
@@ -437,7 +582,7 @@ class ParserRegistryTests(unittest.TestCase):
     def test_only_canonical_names_registered(self):
         self.assertEqual(
             set(BaseOutputParser._registry),
-            {"claude-stream-json", "pi-json", "copilot-json"},
+            {"claude-stream-json", "pi-json", "copilot-json", "codex-json"},
         )
 
     def test_qodercli_and_codebuddy_exist_but_not_registered(self):
@@ -452,6 +597,7 @@ class ParserRegistryTests(unittest.TestCase):
         self.assertIsInstance(get_parser("claude-stream-json"), ClaudeParser)
         self.assertIsInstance(get_parser("pi-json"), PiParser)
         self.assertIsInstance(get_parser("copilot-json"), CopilotParser)
+        self.assertIsInstance(get_parser("codex-json"), CodexParser)
 
     def test_unknown_parser_name_raises(self):
         with self.assertRaises(ValueError):
@@ -476,6 +622,12 @@ class ParserRegistryTests(unittest.TestCase):
 
         copilot_stdout = '{"type":"content_delta","delta":"ab"}\n{"type":"result","result":"ab"}'
         self.assertEqual(parse_output("copilot-json", copilot_stdout).result, "ab")
+
+        codex_stdout = (
+            '{"type":"thread.started","thread_id":"t1"}\n'
+            '{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"hi"}}'
+        )
+        self.assertEqual(parse_output("codex-json", codex_stdout).result, "hi")
 
     def test_subclasses_reuse_parent_parse(self):
         claude_stdout = (

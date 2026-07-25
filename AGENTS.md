@@ -29,7 +29,7 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 
 `PromptBuilder` 负责富消息解析、回复链/群话题上下文、附件下载和最小 JSON prompt。私聊话题依赖 CLI 会话恢复；群话题还需补充未 @ 机器人的群内消息上下文。
 
-`AIRunner` 是 CLI 适配层：依据配置组装命令、注入模型环境变量、管理进程与超时、解析输出并记录关键日志。输出解析采用类注册机制——`BaseOutputParser` 处理公共逻辑（事件迭代、错误检测、结果拼装），各 CLI 子类（Claude、Pi、Copilot）按协议差异提取思考、工具调用、token 用量和最终回复，统一产出 `AIResult`。新增 CLI 只需在 `ai_runner.py` 添加 parser 子类并在 `config.json` 注册。正常消息的 `--session-id` 由服务生成 UUID；话题使用持久化会话 ID 的 `--resume`。
+`AIRunner` 是 CLI 适配层：依据配置组装命令、注入模型环境变量、管理进程与超时、解析输出并记录关键日志。输出解析采用类注册机制——`BaseOutputParser` 处理公共逻辑，各 CLI 子类（Claude、Pi、Copilot、Codex）按协议差异提取为标准化的 `AIResult.parts`（`ThoughtPart`：思考/工具调用/工具结果等）+ token 用量 + 最终回复；`format_thinking(parts, config)` 是中间格式化层，负责 emoji 渲染与按 `show_max_tool_result_length` 截断 tool result。新增 CLI 只需在 `ai_runner.py` 添加 parser 子类（产 ThoughtPart）并在 `config.json` 注册。支持显式会话的 CLI，正常消息由服务生成 UUID `--session-id`；话题用持久化会话 ID `--resume`。
 
 ## 消息与文件
 

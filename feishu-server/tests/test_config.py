@@ -15,6 +15,7 @@ class ConfigTests(unittest.TestCase):
             "copilot": "stdin",
             "codebuddy": "argument",
             "pi": "stdin",
+            "codex": "stdin",
         }
 
         self.assertEqual(config.current_tool(), "pi")

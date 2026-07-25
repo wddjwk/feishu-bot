@@ -4,7 +4,7 @@ FeishuBot 是一个飞书个人工作助手：你在飞书里发消息，它驱�
 
 ## 它能做什么
 
-- **多工具支持**：支持多种本地 AI CLI（qoder / claude / copilot / codebuddy / pi），可随时切换工具与模型。
+- **多工具支持**：支持多种本地 AI CLI（claude / copilot / codex / qoder / codebuddy / pi），可随时切换工具与模型。
 - **可连贯对话**：私聊是每条消息创建新的会话；话题内消息则自动续接同一会话(--resume)。
 - **富消息处理**：支持发送、接受富文本、图片、音频、视频和文件附件
 - **消息卡片**：回复Markdown格式卡片，附带思考过程、token消耗等信息。
@@ -39,3 +39,18 @@ FeishuBot 是一个飞书个人工作助手：你在飞书里发消息，它驱�
 4. **启动**：`./manager start` 一键启动后台服务。用 `./manager status` 查状态、`./manager log` 看日志、`./manager stop` 停止。
 
 如果配置了MAINTAINER_ID，启动后给机器人会自动给你发条飞书消息表示启动成功；发 `/help` 查看所有命令。
+
+## 更多配置
+
+### 自定义Agent记忆
+
+server会在使用过程中不断更新记忆，逐渐更懂你。当然你也可以预先就告诉它一些信息，直接给它注入灵魂
+
+在 `agent-workspace/memory/` 下面手动创建下列几个记忆文件
+1. `memory/SOUL.md`：向AI阐述你的个人信息，偏好，爱好，对AI的要求，你期望它给你的回复方式等等
+2. `memory/LONG_TERM.md`：长期记忆，目标是逐渐沉淀下来的可复用的经验。你如果有一些特殊需要、工作方法论，也可以加到这里面
+3. `memory/SHORT_TERM.md`：短期记忆，主要是AI更新。没有手动写的必要
+
+### 自定义SKILL
+
+在 `agent-workspace/.claude/skills` 下面新增skill，即可被cli加载（不同cli的配置文件夹其实是软连接）

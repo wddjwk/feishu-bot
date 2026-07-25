@@ -30,8 +30,8 @@
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
         "output_parser": "claude-stream-json",
-        "default_model": "Qwen3.8-Max-preview",
-        "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Qwen3.8-Max-preview", "Qwen3.7-Max", "GLM-5.2", "Kimi-K3"],
+        "default_model": "Qwen3.8-Max-Preview",
+        "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Qwen3.8-Max-Preview", "Qwen3.7-Max", "GLM-5.2", "Kimi-K3"],
         "aliases": {
           "max": "GLM-5.2",
           "middle": "Qwen3.7-Max",
@@ -104,6 +104,22 @@
           "max": "deepseek-v4-pro",
           "middle": "deepseek-v4-flash",
           "min": "deepseek-v4-flash"
+        },
+        "env": {}
+      },
+      "codex": {
+        "icon": "🧑‍💻",
+        "command": "codex",
+        "base_args": ["exec", "--json", "--model", "{model}", "--dangerously-bypass-approvals-and-sandbox"],
+        "resume_args": ["resume", "{session_id}"],
+        "prompt_transport": "stdin",
+        "output_parser": "codex-json",
+        "default_model": "gpt-5.6-luna",
+        "model_list": ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"],
+        "aliases": {
+          "max": "gpt-5.6-sol",
+          "middle": "gpt-5.6-terra",
+          "min": "gpt-5.6-luna"
         },
         "env": {}
       }
