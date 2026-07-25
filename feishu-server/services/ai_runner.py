@@ -513,20 +513,57 @@ class CodeBuddyParser(ClaudeParser):
 class PiParser(BaseOutputParser):
     """解析 Pi CLI 的 session/turn/message_update 流式输出。
 
+    工具调用与结果按 call id 配对：toolcall_end 携带 toolCall.id，tool_execution_*
+    携带同一 toolCallId。同一轮的调用先缓存，结果到达时挂回对应调用，turn_end 时按
+    调用顺序输出「🛠 调用 + 📎 结果」，避免「所有调用 → 所有结果」割裂，也避免
+    toolcall_end 与 tool_execution_start 重复渲染调用行（结果可能按完成顺序到达，
+    必须按 id 而非到达顺序配对）。
+
     内容提取策略：
-      - thinking_delta / text_delta：收集到 content_delta_parts 作为兜底。正常情况下
-        turn_end 的完整 content 块是权威来源，deltas 仅在 turn_end 缺失时使用。
-      - toolcall_end：渲染为 🛠 Tool 行。中间轮工具调用记录，turn_end 的 content
-        中虽有 toolCall 块但与之重复，故不从 turn_end 提取 toolCall。
-      - tool_execution_start / tool_execution_update / tool_execution_end：
-        顶层工具执行事件，与 toolcall_end 是不同粒度（调用 vs 执行细节），全部渲染。
-      - turn_end：核心事件。从 ALL turn_end 的 content 提取 thinking 块（每轮的推理）；
-        从最终 turn（stopReason=="stop"）提取 text 块作为正文。usage 逐轮累加。
-      - session：提取 session id。
-      - agent_end / agent_settled / message_start / message_end / turn_start：结构事件。
+      - thinking / text：turn_end 的完整 content 块是权威来源，deltas 仅作兜底。
+      - toolcall_end：缓存调用（id + name + arguments），不立即输出。
+      - tool_execution_start：与 toolcall_end 重复，仅在缺 toolcall_end 时补建调用。
+      - tool_execution_update：挂到对应调用的 partials。
+      - tool_execution_end：挂到对应调用的 result；无对应调用时单独输出。
+      - turn_end：提取 thinking/text 后，按调用顺序 flush 本轮缓存的调用。
     """
 
     name = "pi-json"
+
+    def parse(self, stdout: str, stderr: str) -> AIResult:
+        self._turn_calls: list[str] = []
+        self._calls: dict[str, dict[str, Any]] = {}
+        return super().parse(stdout, stderr)
+
+    def _reset_turn(self) -> None:
+        self._turn_calls = []
+        self._calls = {}
+
+    def _remember_call(self, call_id: str, call_text: str) -> None:
+        if not call_id:
+            return
+        if call_id not in self._calls:
+            self._calls[call_id] = {"call": call_text, "partials": [], "result": None}
+            self._turn_calls.append(call_id)
+        elif call_text:
+            self._calls[call_id]["call"] = call_text
+
+    def _flush_turn(self, ctx: "_ParseContext") -> None:
+        for call_id in self._turn_calls:
+            entry = self._calls.get(call_id)
+            if not entry:
+                continue
+            if entry.get("call"):
+                ctx.thinking_parts.append(entry["call"])
+            for partial in entry.get("partials", []):
+                ctx.thinking_parts.append(partial)
+            if entry.get("result"):
+                ctx.thinking_parts.append(entry["result"])
+        self._reset_turn()
+
+    def _finalize(self, ctx: "_ParseContext", stderr: str) -> AIResult:
+        self._flush_turn(ctx)
+        return super()._finalize(ctx, stderr)
 
     def _handle_event(self, ctx: "_ParseContext", event: dict[str, Any], event_type: str) -> None:
         if event_type == "session":
@@ -534,36 +571,42 @@ class PiParser(BaseOutputParser):
             if isinstance(sid, str) and sid:
                 ctx.session_id = ctx.session_id or sid
             return
+        if event_type == "turn_start":
+            self._reset_turn()
+            return
         if event_type == "message_update":
             inner = event.get("assistantMessageEvent")
             if not isinstance(inner, dict):
                 return
             inner_type = str(inner.get("type") or "").lower()
             if inner_type == "toolcall_end":
-                text = _format_pi_toolcall_end(inner)
-                if text:
-                    ctx.thinking_parts.append(text)
+                call_id, call_text = _pi_toolcall(inner)
+                if call_text:
+                    self._remember_call(call_id, call_text)
             elif inner_type == "text_delta":
                 delta = inner.get("delta")
                 if isinstance(delta, str) and delta:
                     ctx.content_delta_parts.append(_strip_inline_thinking(ctx, delta))
-            # thinking_start/delta, text_start, toolcall_start/delta: skipped
-            # (turn_end carries the complete content blocks — see class docstring)
             return
         if event_type == "tool_execution_start":
-            text = _format_pi_tool_execution(event)
-            if text:
-                ctx.thinking_parts.append(text)
+            call_id = str(event.get("toolCallId") or "")
+            if call_id and call_id not in self._calls:
+                self._remember_call(call_id, _format_pi_tool_execution(event))
             return
         if event_type == "tool_execution_end":
-            text = _format_pi_tool_result(event)
-            if text:
-                ctx.thinking_parts.append(text)
+            call_id = str(event.get("toolCallId") or "")
+            result_text = _format_pi_tool_result(event)
+            if call_id and call_id in self._calls:
+                if result_text:
+                    self._calls[call_id]["result"] = result_text
+            elif result_text:
+                ctx.thinking_parts.append(result_text)
             return
         if event_type == "tool_execution_update":
-            text = _format_pi_tool_partial(event)
-            if text:
-                ctx.thinking_parts.append(text)
+            call_id = str(event.get("toolCallId") or "")
+            partial_text = _format_pi_tool_partial(event)
+            if call_id and call_id in self._calls and partial_text:
+                self._calls[call_id]["partials"].append(partial_text)
             return
         if event_type == "turn_end":
             message = event.get("message")
@@ -589,9 +632,9 @@ class PiParser(BaseOutputParser):
                                         ctx.result_parts.append(clean)
                                     else:
                                         ctx.thinking_parts.append(clean)
-                        # toolCall blocks skipped — duplicate toolcall_end events
+            self._flush_turn(ctx)
             return
-        # agent_end / agent_settled / message_start / message_end / turn_start: no-op
+        # agent_end / agent_settled / message_start / message_end: no-op
 
 
 class CopilotParser(BaseOutputParser):
@@ -808,18 +851,18 @@ def _fallback_result(parts: list[str]) -> str:
     return ""
 
 
-def _format_pi_toolcall_end(inner: dict[str, Any]) -> str:
-    """Format pi's message_update.inner event of type toolcall_end.
+def _pi_toolcall(inner: dict[str, Any]) -> tuple[str, str]:
+    """Extract (callId, formatted call text) from a pi toolcall_end event.
 
-    toolcall_end carries the complete toolCall block (name + full arguments).
-    toolcall_start / toolcall_delta carry partial state and are not rendered.
+    toolcall_end carries the complete toolCall block (id + name + full arguments);
+    the id matches the toolCallId on tool_execution_* events, enabling pairing.
     """
     partial = inner.get("partial")
     if not isinstance(partial, dict):
-        return ""
+        return "", ""
     content = partial.get("content")
     if not isinstance(content, list):
-        return ""
+        return "", ""
     idx = inner.get("contentIndex")
     block = None
     if isinstance(idx, int) and 0 <= idx < len(content):
@@ -832,10 +875,11 @@ def _format_pi_toolcall_end(inner: dict[str, Any]) -> str:
                 block = b
                 break
     if block is None:
-        return ""
+        return "", ""
+    call_id = str(block.get("id") or "")
     name = str(block.get("name") or "tool")
     args = block.get("arguments") or block.get("partialArgs")
-    return _format_tool_use({"name": name, "input": args})
+    return call_id, _format_tool_use({"name": name, "input": args})
 
 
 def _format_pi_tool_execution(event: dict[str, Any]) -> str:

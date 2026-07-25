@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -521,6 +522,65 @@ class InlineThinkingTests(unittest.TestCase):
         result = parse_output("claude-stream-json", stdout)
         self.assertEqual(result.result, "ok")
         self.assertIn("reasoning", result.thinking)
+
+
+class PiToolPairingTests(unittest.TestCase):
+    """Pi 的工具调用与结果应按 toolCallId 配对、按调用顺序输出，且不重复。"""
+
+    @staticmethod
+    def _toolcall_end(call_id: str, name: str, args: dict) -> str:
+        return json.dumps({
+            "type": "message_update",
+            "assistantMessageEvent": {
+                "type": "toolcall_end",
+                "contentIndex": 0,
+                "partial": {
+                    "role": "assistant",
+                    "content": [{"type": "toolCall", "id": call_id, "name": name, "arguments": args}],
+                },
+            },
+        })
+
+    @staticmethod
+    def _exec_end(call_id: str, result_text: str) -> str:
+        return json.dumps({
+            "type": "tool_execution_end",
+            "toolCallId": call_id,
+            "toolName": "x",
+            "result": result_text,
+            "isError": False,
+        })
+
+    def test_pairs_calls_with_results_in_call_order(self):
+        stdout = "\n".join([
+            '{"type":"session","id":"s1"}',
+            '{"type":"turn_start"}',
+            self._toolcall_end("call_00", "web_search", {"query": "a"}),
+            self._toolcall_end("call_01", "bash", {"command": "ls"}),
+            # results arrive in reverse (completion) order
+            self._exec_end("call_01", "bash-out"),
+            self._exec_end("call_00", "search-out"),
+            '{"type":"turn_end","message":{"stopReason":"tool_use","content":[{"type":"thinking","thinking":"plan"}]}}',
+            '{"type":"turn_end","message":{"stopReason":"stop","content":[{"type":"text","text":"done"}]}}',
+        ])
+        result = parse_output("pi-json", stdout)
+
+        # each call rendered once (no toolcall_end / tool_execution_start duplication)
+        self.assertEqual(result.thinking.count("🛠 Tool web_search"), 1)
+        self.assertEqual(result.thinking.count("🛠 Tool bash"), 1)
+        # paired by id: call_00's result is search-out even though bash-out arrived first
+        self.assertIn("search-out", result.thinking)
+        self.assertIn("bash-out", result.thinking)
+        # call order: call_00 + its result before call_01 + its result
+        i_call0 = result.thinking.index("🛠 Tool web_search")
+        i_res0 = result.thinking.index("search-out")
+        i_call1 = result.thinking.index("🛠 Tool bash")
+        i_res1 = result.thinking.index("bash-out")
+        self.assertLess(i_call0, i_res0)
+        self.assertLess(i_res0, i_call1)
+        self.assertLess(i_call1, i_res1)
+        # final turn text captured as the reply
+        self.assertEqual(result.result, "done")
 
 
 if __name__ == "__main__":
