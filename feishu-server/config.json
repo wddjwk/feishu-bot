@@ -4,7 +4,8 @@
     "reaction_processing": "OnIt",
     "card_width": "half",
     "features": {
-      "show_token_usage_on_card": true
+      "show_token_usage_on_card": true,
+      "show_max_tool_result_length": 500
     },
     "user_data": [
       "agent-workspace/memory",

@@ -18,6 +18,7 @@ from typing import Any
 
 import cards
 from config import Config, ConfigError
+from display import shape_for_display
 from services.ai_runner import AIRunner
 from services.messenger import FeishuApiError, Messenger
 import logger
@@ -261,6 +262,7 @@ class Scheduler:
             model=model,
             timeout_seconds=task.timeout_seconds,
         )
+        result = shape_for_display(result, self.config)
         if result.ok:
             return cards.build_ai_card(
                 result.tool,
