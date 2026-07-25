@@ -167,7 +167,7 @@ class MessageHandler(BaseHandler):
                         result.exit_code,
                     )
                 if result.ok:
-                    delivery = extract_file_deliveries(result.result, delivery_dir)
+                    delivery = extract_file_deliveries(result.result, delivery_dir, self.config.resolve_path("ai.workspace"))
                     if delivery.paths:
                         self._reply_deliveries(message, delivery.paths, delivery.text, result, conversation)
                     else:

@@ -67,15 +67,21 @@ class LarkCliWrapperTests(unittest.TestCase):
         self.assertEqual(path.name, "image")
         self.assertIn("download", str(path))
 
-    def test_rejects_outside_workspace_media_path(self):
+    def test_accepts_media_path_outside_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             wrapper = self._wrapper(root)
             outside = root / "outside.txt"
             outside.write_text("no", encoding="utf-8")
 
-            with self.assertRaises(LarkCliError):
+            with patch.object(wrapper, "ensure_bot_identity"), patch.object(
+                wrapper, "_run_json", return_value={"data": {"message_id": "om_ok"}}
+            ) as run:
                 wrapper.reply_file("om_xxx", outside)
+
+        self.assertTrue(run.called)
+        self.assertEqual(run.call_args.kwargs["cwd"], outside.parent)
+        self.assertIn(f"./{outside.name}", run.call_args.args[0])
 
 
 if __name__ == "__main__":

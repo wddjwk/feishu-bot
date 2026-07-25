@@ -129,7 +129,7 @@ class LarkCliWrapper:
         *,
         reply_in_thread: bool,
     ) -> dict[str, Any]:
-        path = self._workspace_file(path)
+        path = path.resolve()
         if not path.is_file():
             raise LarkCliError(f"待发送的文件不存在：{path}")
         self.ensure_bot_identity()
@@ -142,7 +142,7 @@ class LarkCliWrapper:
         return result
 
     def _send_media(self, chat_id: str, path: Path, media_flag: str) -> dict[str, Any]:
-        path = self._workspace_file(path)
+        path = path.resolve()
         if not path.is_file():
             raise LarkCliError(f"待发送的文件不存在：{path}")
         self.ensure_bot_identity()

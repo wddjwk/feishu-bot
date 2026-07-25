@@ -18,7 +18,8 @@ class FileDelivery:
     errors: list[str]
 
 
-def extract_file_deliveries(result: str, workspace: Path) -> FileDelivery:
+def extract_file_deliveries(result: str, work_dir: Path, workspace: Path) -> FileDelivery:
+    work_dir = work_dir.resolve()
     workspace = workspace.resolve()
     paths: list[Path] = []
     errors: list[str] = []
@@ -26,18 +27,16 @@ def extract_file_deliveries(result: str, workspace: Path) -> FileDelivery:
     for match in FILE_MARKER.finditer(result):
         raw_path = match.group("path").strip()
         candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            errors.append(f"文件标记必须使用绝对路径：{raw_path}")
-            logger.warning("文件交付标记无效（非绝对路径）：%s", raw_path)
-            continue
-        resolved = candidate.resolve()
-        try:
-            resolved.relative_to(workspace)
-        except ValueError:
-            errors.append(f"文件不在 agent-workspace 内：{raw_path}")
-            logger.warning("文件交付标记无效（超出工作目录）：%s", raw_path)
-            continue
-        if not resolved.is_file():
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = None
+            for base in (work_dir, workspace):
+                option = (base / candidate).resolve()
+                if option.is_file():
+                    resolved = option
+                    break
+        if resolved is None or not resolved.is_file():
             errors.append(f"文件不存在：{raw_path}")
             logger.warning("文件交付标记无效（文件不存在）：%s", raw_path)
             continue
