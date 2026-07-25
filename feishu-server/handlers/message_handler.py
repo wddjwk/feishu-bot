@@ -11,7 +11,6 @@ from uuid import uuid4
 import cards
 import commands
 from config import Config, ConfigError
-from display import shape_for_display
 from handlers import BaseHandler
 from services.ai_runner import AIRunner
 from services.messenger import FeishuApiError, Messenger
@@ -153,7 +152,6 @@ class MessageHandler(BaseHandler):
                     session_id=None if conversation.resume else conversation.session_id,
                     resume_session_id=conversation.session_id if conversation.resume else None,
                 )
-                result = shape_for_display(result, self.config)
                 if result.ok:
                     logger.info(
                         "AI 处理完成：消息=%s 会话=%s 回复长度=%s",
