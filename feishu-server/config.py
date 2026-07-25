@@ -224,6 +224,17 @@ class Config:
         self._runtime_models[tool] = model
         return model
 
+    def set_default_tool(self, tool: str) -> None:
+        """切换运行期默认 CLI，但不锁定模型覆盖。
+
+        供启动回退使用：只设 _runtime_tool，不设 _runtime_models，使
+        resolve_model 回落到 default_model(tool)——这样后续 /reload 修改
+        default_model 仍能生效。/cli 仍用 set_tool（会重置模型到默认）。
+        """
+        if tool not in self.tools():
+            raise ConfigError(f"不支持的 AI CLI：{tool}")
+        self._runtime_tool = tool
+
     def _raw_tool(self, tool: str) -> dict[str, Any]:
         raw = self._get(self._data, f"ai.tools.{tool}")
         if not isinstance(raw, dict):

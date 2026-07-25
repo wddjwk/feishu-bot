@@ -74,6 +74,17 @@ class StartupNotificationTests(unittest.TestCase):
 
         self.assertEqual(config.current_tool(), "qoder")
 
+    def test_fallback_does_not_lock_model(self):
+        config = Config()
+        with patch("main.shutil.which", side_effect=lambda cmd: "/fake/qodercli" if cmd == "qodercli" else None):
+            main.apply_default_tool_fallback(config)
+        self.assertEqual(config.current_tool(), "qoder")
+        # resolve_model falls through to default_model (no _runtime_models lock from fallback)
+        self.assertEqual(config.resolve_model(), config.default_model("qoder"))
+        # changing default_model is reflected immediately (no stale runtime override)
+        config.set("ai.tools.qoder.default_model", "changed-model")
+        self.assertEqual(config.resolve_model(), "changed-model")
+
     def test_startup_message_lists_cli_and_availability(self):
         config = Config()
         messenger = FakeMessenger()

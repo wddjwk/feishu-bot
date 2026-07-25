@@ -60,7 +60,7 @@ def apply_default_tool_fallback(config: Config) -> list[tuple[str, str, bool]]:
         return results
     fallback = next((name for name, _, exists in results if exists), None)
     if fallback:
-        config.set_tool(fallback)
+        config.set_default_tool(fallback)
         logger.warning("默认 CLI %s 未安装，已回退到 %s", default, fallback)
     else:
         logger.error("默认 CLI %s 未安装，且没有其他已安装的 AI CLI 可用", default)
@@ -94,9 +94,9 @@ def send_startup_notifications(config: Config, messenger: Messenger) -> None:
         "",
         "CLI 可用性：",
     ]
-    for name, command, exists in cli_availability(config):
+    for name, _, exists in sorted(cli_availability(config), key=lambda r: (len(r[0]), r[0])):
         status = "已安装" if exists else "未安装"
-        lines.append(f"- `{name}`（{command}）：{status}")
+        lines.append(f"- `{name}`：{status}")
     if pending_data.get("reply_text"):
         lines.extend(["", pending_data["reply_text"]])
     card = cards.build_generic_card("FeishuBot 已启动", "\n".join(lines), "green")

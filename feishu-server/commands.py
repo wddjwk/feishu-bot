@@ -122,7 +122,7 @@ def _model(ctx: CommandContext) -> CommandResponse:
     return CommandResponse(cards.build_generic_card("模型已切换", f"`{tool}` → `{model}`", "green"))
 
 
-@registry.exact(["/reload"], "重新加载 config.json")
+@registry.exact(["/reload"], "重新加载 config.json（含根目录用户覆盖）")
 def _reload(ctx: CommandContext) -> CommandResponse:
     try:
         ctx.config.reload()
@@ -132,7 +132,7 @@ def _reload(ctx: CommandContext) -> CommandResponse:
         logger.exception("配置重载失败：%s", exc)
         return CommandResponse(cards.build_error_card("配置重载失败", str(exc)))
     logger.info("配置已重新加载")
-    return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 读取最新配置。", "green"))
+    return CommandResponse(cards.build_generic_card("配置已重新加载", "已重新加载 `feishu-server/config.json` 与根目录 `config.json`（用户覆盖）。", "green"))
 
 
 @registry.exact(["/status"], "展示版本、CLI、模型、运行任务和定时任务")
