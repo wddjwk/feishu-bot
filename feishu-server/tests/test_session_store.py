@@ -10,15 +10,15 @@ class FakeConfig:
     def __init__(self, root: Path, **options) -> None:
         self.root = root
         self.options = {
-            "session_store.path": "data/session_map.json",
-            "session_store.max_links": 10,
-            "session_store.retention_days": 90,
-            "session_store.cleanup_interval_seconds": 1,
+            "server.session_store.path": "data/session_map.json",
+            "server.session_store.max_links": 10,
+            "server.session_store.retention_days": 90,
+            "server.session_store.cleanup_interval_seconds": 1,
             **options,
         }
 
     def resolve_path(self, dotted: str) -> Path:
-        if dotted != "session_store.path":
+        if dotted != "server.session_store.path":
             raise AssertionError(f"unexpected path config: {dotted}")
         return (self.root / self.options[dotted]).resolve()
 
@@ -85,8 +85,8 @@ class SessionStoreTests(unittest.TestCase):
                 FakeConfig(
                     root,
                     **{
-                        "session_store.max_links": 2,
-                        "session_store.retention_days": 1,
+                        "server.session_store.max_links": 2,
+                        "server.session_store.retention_days": 1,
                     },
                 )
             )

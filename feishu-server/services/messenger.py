@@ -60,15 +60,15 @@ class Messenger:
     ) -> None:
         self.config = config
         self.token_provider = token_provider
-        self.base_url = str(config.get("feishu.base_url")).rstrip("/")
+        self.base_url = str(config.get("server.base_url")).rstrip("/")
         self.lark_cli = lark_cli or LarkCliWrapper.from_config(config)
         self._bot_open_id = ""
         self._bot_open_id_lock = threading.Lock()
 
-    def reply_card(self, message_id: str, card: dict[str, Any], *, reply_in_thread: bool | None = None) -> dict[str, Any]:
+    def reply_card(self, message_id: str, card: dict[str, Any], *, reply_in_thread: bool = False) -> dict[str, Any]:
         return self.reply_message(message_id, "interactive", card, reply_in_thread=reply_in_thread)
 
-    def reply_text(self, message_id: str, text: str, *, reply_in_thread: bool | None = None) -> dict[str, Any]:
+    def reply_text(self, message_id: str, text: str, *, reply_in_thread: bool = False) -> dict[str, Any]:
         return self.reply_message(message_id, "text", {"text": text}, reply_in_thread=reply_in_thread)
 
     def reply_message(
@@ -77,12 +77,12 @@ class Messenger:
         msg_type: str,
         content: dict[str, Any],
         *,
-        reply_in_thread: bool | None = None,
+        reply_in_thread: bool = False,
     ) -> dict[str, Any]:
         body = {
             "msg_type": msg_type,
             "content": json.dumps(content, ensure_ascii=False),
-            "reply_in_thread": self.config.get("feishu.reply_in_thread", True) if reply_in_thread is None else reply_in_thread,
+            "reply_in_thread": reply_in_thread,
             "uuid": str(uuid.uuid4()),
         }
         return self._request_json("POST", f"/im/v1/messages/{quote(message_id)}/reply", body=body).get("data", {})

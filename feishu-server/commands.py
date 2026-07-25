@@ -122,17 +122,17 @@ def _model(ctx: CommandContext) -> CommandResponse:
     return CommandResponse(cards.build_generic_card("模型已切换", f"`{tool}` → `{model}`", "green"))
 
 
-@registry.exact(["/reload"], "重新加载 config.json 和 model.json")
+@registry.exact(["/reload"], "重新加载 config.json")
 def _reload(ctx: CommandContext) -> CommandResponse:
     try:
         ctx.config.reload()
-        cards.configure_card_width(str(ctx.config.get("feishu.card_width", "half")))
-        cards.configure_tool_icons(ctx.config.get("feishu.tool_icons", {}))
+        cards.configure_card_width(str(ctx.config.get("options.card_width", "half")))
+        cards.configure_tool_icons(ctx.config.tool_icons())
     except Exception as exc:
         logger.exception("配置重载失败：%s", exc)
         return CommandResponse(cards.build_error_card("配置重载失败", str(exc)))
     logger.info("配置已重新加载")
-    return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 和 `model.json` 读取最新配置。", "green"))
+    return CommandResponse(cards.build_generic_card("配置已重新加载", "已从 `config.json` 读取最新配置。", "green"))
 
 
 @registry.exact(["/status"], "展示版本、CLI、模型、运行任务和定时任务")
@@ -195,11 +195,11 @@ def _kill(ctx: CommandContext) -> CommandResponse:
 
 
 def _export_config(ctx: CommandContext) -> tuple[list[str], Path, Path]:
-    config_paths = ctx.config.get("export_paths")
+    config_paths = ctx.config.get("options.user_data")
     if not isinstance(config_paths, list) or not config_paths:
-        raise RuntimeError("config.json 缺少 export_paths 配置")
-    project_root = ctx.config.base_dir().parent
-    dest_dir = ctx.config.resolve_path("prompt.work_root")
+        raise RuntimeError("config.json 缺少 options.user_data 配置")
+    project_root = ctx.config.project_root()
+    dest_dir = ctx.config.resolve_path("ai.agent_context_path")
     return config_paths, project_root, dest_dir
 
 

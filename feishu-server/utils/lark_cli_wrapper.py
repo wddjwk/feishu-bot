@@ -40,11 +40,11 @@ class LarkCliWrapper:
     @classmethod
     def from_config(cls, config: Any) -> "LarkCliWrapper":
         return cls(
-            config.base_dir().parent,
+            config.project_root(),
             config.resolve_path("ai.workspace"),
-            executable=str(config.get("lark_cli.command", "lark-cli")),
-            profile=str(config.get("lark_cli.profile", "feishu-bot-server")),
-            timeout_seconds=int(config.get("lark_cli.timeout_seconds", 120)),
+            executable=str(config.get("server.lark_cli.command", "lark-cli")),
+            profile=str(config.get("server.lark_cli.profile", "feishu-bot-server")),
+            timeout_seconds=int(config.get("server.lark_cli.timeout_seconds", 120)),
         )
 
     def download_message_resource(

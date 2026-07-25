@@ -179,7 +179,7 @@ class MessageHandler(BaseHandler):
                             result.model,
                             result_text or "任务已完成。",
                             result.thinking,
-                            usage=result.usage if self.config.get("features.show_token_usage_on_card", True) else None,
+                            usage=result.usage if self.config.get("options.features.show_token_usage_on_card", True) else None,
                         )
                         try:
                             reply = self.messenger.reply_card(message_id, card, reply_in_thread=self._reply_in_thread(message))
@@ -412,10 +412,10 @@ class MessageHandler(BaseHandler):
         is_topic: bool,
         source_message_id: str,
     ) -> None:
-        if not self.config.get("ai.auto_memory_resume", True):
+        if not self.config.get("ai.auto_remind_add_memory", True):
             return
         prompt = self._build_memory_prompt(is_topic)
-        timeout = int(self.config.get("ai.auto_memory_resume_timeout_seconds", 300))
+        timeout = int(self.config.get("ai.auto_remind_add_memory_timeout_seconds", 300))
         memory_message_id = f"auto-memory-{session_id}-{source_message_id}"
         logger.info("触发自动记忆 resume：会话=%s 来源消息=%s", session_id, source_message_id)
         try:
@@ -447,7 +447,7 @@ class MessageHandler(BaseHandler):
 """
 
     def _add_processing_reaction(self, message_id: str) -> str | None:
-        emoji = self.config.get("feishu.reaction_processing", "")
+        emoji = self.config.get("options.reaction_processing", "")
         if not emoji:
             return None
         try:

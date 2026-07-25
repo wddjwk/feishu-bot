@@ -287,7 +287,7 @@ class ParseOutputTests(unittest.TestCase):
                 }
 
             def get(self, dotted, default=None):
-                if dotted == "ai.max_argument_prompt_bytes":
+                if dotted == "ai.max_prompt_length_bytes":
                     return 5
                 return default
 

@@ -19,16 +19,15 @@ class FakeConfig:
 
     def get(self, dotted: str, default=None):
         values = {
-            "feishu.reaction_processing": "OnIt",
-            "prompt.group_thread_context_limit": 100,
-            "ai.auto_memory_resume": False,
+            "options.reaction_processing": "OnIt",
+            "ai.auto_remind_add_memory": False,
         }
         return values.get(dotted, default)
 
     def resolve_path(self, dotted: str) -> Path:
         if dotted == "ai.workspace":
             return self.workspace
-        if dotted == "prompt.work_root":
+        if dotted == "ai.agent_context_path":
             return self.download_dir
         return self.download_dir
 
@@ -540,9 +539,9 @@ class AutoMemoryResumeTests(unittest.TestCase):
 
         class _Cfg(FakeConfig):
             def get(self, dotted, default=None):
-                if dotted == "ai.auto_memory_resume":
+                if dotted == "ai.auto_remind_add_memory":
                     return True
-                if dotted == "ai.auto_memory_resume_timeout_seconds":
+                if dotted == "ai.auto_remind_add_memory_timeout_seconds":
                     return 120
                 return super().get(dotted, default)
 

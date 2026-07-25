@@ -72,7 +72,7 @@ def build_prompt(
     reply_chain = _trace_reply_chain(message, messenger) if message.get("parent_id") else [message]
     root_message_id = _root_message_id(message, reply_chain)
     work_dir = _work_dir(config, root_message_id)
-    group_thread = _group_thread_context(message, messenger, config) if message.get("thread_id") and message.get("chat_type") == "group" else []
+    group_thread = _group_thread_context(message, messenger) if message.get("thread_id") and message.get("chat_type") == "group" else []
     attachment_messages = _merge_messages(reply_chain, group_thread)
     attachments, references = _download_attachments(attachment_messages, messenger, work_dir)
     logger.debug(
@@ -201,10 +201,8 @@ def _trace_reply_chain(message: dict[str, Any], messenger: Messenger) -> list[di
     return chain
 
 
-def _group_thread_context(message: dict[str, Any], messenger: Messenger, config: Config) -> list[dict[str, Any]]:
-    limit = int(config.get("prompt.group_thread_context_limit", 100))
-    if limit <= 0:
-        return [message]
+def _group_thread_context(message: dict[str, Any], messenger: Messenger) -> list[dict[str, Any]]:
+    limit = 100
     messages = [
         normalize_message(item)
         for item in messenger.list_messages(
@@ -243,7 +241,7 @@ def _root_message_id(message: dict[str, Any], reply_chain: list[dict[str, Any]])
 
 def _work_dir(config: Config, root_message_id: str) -> Path:
     safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", root_message_id).strip("._")
-    work_root = config.resolve_path("prompt.work_root")
+    work_root = config.resolve_path("ai.agent_context_path")
     work_dir = work_root / (safe_id or "unknown")
     return work_dir.resolve()
 

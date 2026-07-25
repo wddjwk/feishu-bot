@@ -20,7 +20,7 @@ class FeishuBotApp:
 
         logger.reconfigure_lark()
         event_handler = self._build_event_handler(lark)
-        log_level = getattr(lark.LogLevel, str(self.config.get("logging.level", "INFO")).upper(), lark.LogLevel.INFO)
+        log_level = getattr(lark.LogLevel, str(self.config.get("server.logging.level", "INFO")).upper(), lark.LogLevel.INFO)
         client = lark.ws.Client(self.app_id, self.app_secret, event_handler=event_handler, log_level=log_level)
         logger.info("正在启动飞书长连接客户端：app_id=%s*** log_level=%s", self.app_id[:6], log_level)
         client.start()

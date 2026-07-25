@@ -12,7 +12,7 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 - **会话优先**：普通消息开启新会话；只有话题消息通过已保存的映射使用原 CLI、模型和 `--resume` 续接。
 - **最小 prompt**：传给 AI 的是 JSON 信封，只含用户 ID、用户输入、必要上下文与 `workfolder`；不传飞书原始事件、消息 ID 映射或服务内部状态。
 - **文件隔离**：每个消息使用 `agent-workspace/workfolder/<root-msg-id>` 存附件和产物。AI 真实 cwd 仍是 `agent-workspace`，但必须将用户文件产物限制在 prompt 指定的 `workfolder`。
-- **配置驱动**：模型选择与 CLI 启动参数分离，运行期命令切换不写回配置文件。
+- **配置驱动**：`config.json` 统一管理飞书、AI CLI 与服务配置；运行期命令切换不写回配置文件。
 
 ## 主链路
 
@@ -41,25 +41,25 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 
 ## 状态、配置与命令
 
-- `config.json`：飞书、服务、日志、工作目录、lark-cli 与各 CLI 的启动参数；`features` 节控制功能开关（如 `show_token_usage_on_card`）。
-- `model.json`：默认 CLI、每个 CLI 的默认模型、模型列表、别名和环境变量。
-- `/reload` 热加载两份配置，但保留当前进程内通过 `/cli`、`/model` 做出的选择；重启后恢复配置默认值。
+- `feishu-server/config.json`：唯一配置文件；相对路径以仓库根为基准。
+- 根目录 `config.json`（可选、不入 git）：用户覆盖，深度合并优先；示例见 `config.json.example`。
+- `/reload` 热加载配置（含用户覆盖），保留进程内 `/cli`、`/model` 选择；重启后恢复默认。
 - `cards.py` 统一管理 Card JSON 2.0；卡片结构为标题（工具图标+模型名）、正文（Markdown，长代码块自动折叠）、token 用量（状态栏风格小字）、分析过程折叠块。卡片宽度和工具图标由配置控制。
 - 用户命令仅维护 `/help`、`/running`、`/kill`、`/timer`、`/timer-rm`、`/reload`、`/status`、`/cli`、`/model`。
-- `data/session_map.json` 保存会话与飞书消息/话题关联；它是可清理的运行数据，不是业务数据库。
+- `feishu-server/data/session_map.json` 保存会话与飞书消息/话题关联；它是可清理的运行数据，不是业务数据库。
 
 ## 定时任务
 
-调度器监听本地 `127.0.0.1` API，任务状态保存在 `data/tasks.json`。
+调度器监听本地 `127.0.0.1` API，任务状态保存在 `feishu-server/data/tasks.json`。
 
 - `script`：固定、确定、不需要推理的工作优先使用。脚本必须位于 `agent-workspace/scheduler/<task-id>/`，以 argv 直接执行。
-- `agent`：仅用于需要推理、研究、归纳或撰写的任务。未指定时固定使用 `model.json` 默认 CLI/模型；可在任务 payload 固定 `tool` 与 `model`。
+- `agent`：仅用于需要推理、研究、归纳或撰写的任务。未指定时固定使用 `config.json` 的默认 CLI/模型；可在任务 payload 固定 `tool` 与 `model`。
 - 定时任务的使用规范见 `agent-workspace/.claude/skills/feishu-scheduler/SKILL.md`。
 
 ## 开发与运维
 
 - 凭据只放 `.env`；运行数据、日志、`workfolder/`、`scheduler/` 和记忆目录均不提交。
-- 修改服务后按针对性测试验证；常用验证为 `python -m unittest discover -s tests`、`compileall` 及两个 JSON 校验。
+- 修改服务后按针对性测试验证；常用验证为 `python -m unittest discover -s tests`、`compileall` 及 JSON 校验。
 - 使用 `./manager start|stop|status|log` 管理服务。AI 自更新只能使用 `./manager deferred-restart 5`，禁止在回复过程中直接重启。
 - 飞书后台需启用机器人能力、订阅 `im.message.receive_v1`、配置消息/资源/表情权限并发布版本；缺权限或接口字段不确定时优先查官方文档。
 

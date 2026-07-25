@@ -73,7 +73,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("codebuddy", listed.card["body"]["elements"][0]["content"])
         self.assertEqual(config.current_tool(), "claude")
         self.assertEqual(config.resolve_model(), config.default_model("claude"))
-        self.assertIn("deepseek-v4-flash", switched.card["body"]["elements"][0]["content"])
+        self.assertIn("claude-sonnet-5", switched.card["body"]["elements"][0]["content"])
 
     def test_cli_rejects_unknown_tool_without_changing_selection(self):
         config = Config()

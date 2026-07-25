@@ -24,10 +24,10 @@ class SessionStoreError(RuntimeError):
 
 class SessionStore:
     def __init__(self, config: Config) -> None:
-        self.path = config.resolve_path("session_store.path")
-        self.max_links = self._config_int(config, "session_store.max_links", 500, minimum=0)
-        self.retention_days = self._config_int(config, "session_store.retention_days", 90, minimum=0)
-        self.cleanup_interval_seconds = self._config_int(config, "session_store.cleanup_interval_seconds", 3600, minimum=1)
+        self.path = config.resolve_path("server.session_store.path")
+        self.max_links = self._config_int(config, "server.session_store.max_links", 500, minimum=0)
+        self.retention_days = self._config_int(config, "server.session_store.retention_days", 90, minimum=0)
+        self.cleanup_interval_seconds = self._config_int(config, "server.session_store.cleanup_interval_seconds", 3600, minimum=1)
         self._lock = threading.RLock()
         self._next_cleanup_at = 0.0
         self.path.parent.mkdir(parents=True, exist_ok=True)

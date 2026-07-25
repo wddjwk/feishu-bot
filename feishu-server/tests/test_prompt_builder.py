@@ -18,13 +18,10 @@ class FakeConfig:
         self.root = root
 
     def get(self, dotted: str, default=None):
-        values = {
-            "prompt.group_thread_context_limit": 50,
-        }
-        return values.get(dotted, default)
+        return default
 
     def resolve_path(self, dotted: str):
-        if dotted != "prompt.work_root":
+        if dotted != "ai.agent_context_path":
             raise AssertionError(dotted)
         return self.root / "workfolder"
 

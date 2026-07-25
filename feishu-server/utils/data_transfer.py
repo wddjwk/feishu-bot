@@ -43,7 +43,8 @@ def resolve_export_files(config_paths: list[str], project_root: Path) -> list[Pa
         else:
             path = (project_root / raw).resolve()
             if not path.exists():
-                raise DataTransferError(f"导出路径不存在：{raw}")
+                logger.warning("导出路径不存在，已跳过：%s", raw)
+                continue
             if path.is_file():
                 if path not in seen:
                     seen.add(path)

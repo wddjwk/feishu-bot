@@ -1,101 +1,137 @@
 {
-  "version": "v2.4.4",
-  "feishu": {
-    "base_url": "https://open.feishu.cn/open-apis",
-    "reply_in_thread": false,
+  "version": "v2.5.0",
+  "options": {
     "reaction_processing": "OnIt",
     "card_width": "half",
-    "tool_icons": {
-      "qoder": "🦸‍♂️",
-      "claude": "🧞",
-      "copilot": "🧚",
-      "codebuddy": "🧑‍🎤",
-      "pi": "🧑‍🚀"
-    }
+    "features": {
+      "show_token_usage_on_card": true
+    },
+    "user_data": [
+      "agent-workspace/memory",
+      "feishu-server/data",
+      "config.json"
+    ]
   },
   "ai": {
+    "workspace": "agent-workspace",
+    "agent_context_path": "agent-workspace/workfolder",
     "timeout_seconds": 36000,
-    "max_argument_prompt_bytes": 100000,
-    "workspace": "../agent-workspace",
-    "auto_memory_resume": true,
-    "auto_memory_resume_timeout_seconds": 300,
+    "max_prompt_length_bytes": 100000,
+    "auto_remind_add_memory": true,
+    "auto_remind_add_memory_timeout_seconds": 300,
+    "default_tool": "pi",
     "tools": {
       "qoder": {
+        "icon": "🦸‍♂️",
         "command": "qodercli",
         "base_args": ["--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "claude-stream-json"
+        "output_parser": "claude-stream-json",
+        "default_model": "Qwen3.8-Max-preview",
+        "model_list": ["DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Qwen3.8-Max-preview", "Qwen3.7-Max", "GLM-5.2", "Kimi-K3"],
+        "aliases": {
+          "max": "GLM-5.2",
+          "middle": "Qwen3.7-Max",
+          "min": "DeepSeek-V4-Flash"
+        },
+        "env": {}
       },
       "claude": {
+        "icon": "🧞",
         "command": "claude",
         "base_args": ["--model", "{model}", "--output-format", "stream-json", "--verbose", "--print", "--dangerously-skip-permissions"],
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "claude-stream-json"
+        "output_parser": "claude-stream-json",
+        "default_model": "claude-sonnet-5",
+        "model_list": ["claude-haiku-4.5", "claude-sonnet-5", "claude-opus-4.8", "claude-fable-5"],
+        "aliases": {
+          "max": "claude-opus-4.8",
+          "middle": "claude-sonnet-5",
+          "min": "claude-haiku-4.5"
+        },
+        "env": {}
       },
       "copilot": {
+        "icon": "🧚",
         "command": "copilot",
         "base_args": ["--model", "{model}", "--output-format", "json", "--no-ask-user", "--allow-all"],
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "copilot-json"
+        "output_parser": "copilot-json",
+        "default_model": "claude-sonnet-5",
+        "model_list": ["claude-haiku-4.5", "claude-sonnet-5", "claude-opus-4.8", "gpt-5.6-luna", "gpt-5.6-sol"],
+        "aliases": {
+          "max": "claude-opus-4.8",
+          "middle": "claude-sonnet-5",
+          "min": "gpt-5.6-luna"
+        },
+        "env": {}
       },
       "codebuddy": {
+        "icon": "🧑‍🎤",
         "command": "codebuddy",
         "base_args": ["--print", "--model", "{model}", "--output-format", "stream-json", "--dangerously-skip-permissions"],
         "session_args": ["--session-id", "{session_id}"],
         "resume_args": ["--resume", "{session_id}"],
         "prompt_transport": "argument",
-        "output_parser": "claude-stream-json"
+        "output_parser": "claude-stream-json",
+        "default_model": "deepseek-v4-pro",
+        "model_list": ["deepseek-v4-flash", "deepseek-v4-pro"],
+        "aliases": {
+          "max": "deepseek-v4-pro",
+          "middle": "deepseek-v4-flash",
+          "min": "deepseek-v4-flash"
+        },
+        "env": {}
       },
       "pi": {
+        "icon": "🧑‍🚀",
         "command": "pi",
-        "base_args": [ "--print", "--model", "{model}", "--mode", "json", "--approve" ],
-        "session_args": [ "--session-id", "{session_id}" ],
-        "resume_args": [ "--session-id", "{session_id}" ],
+        "base_args": ["--print", "--model", "{model}", "--mode", "json", "--approve"],
+        "session_args": ["--session-id", "{session_id}"],
+        "resume_args": ["--session-id", "{session_id}"],
         "prompt_transport": "stdin",
-        "output_parser": "pi-json"
+        "output_parser": "pi-json",
+        "default_model": "deepseek-v4-flash",
+        "model_list": ["deepseek-v4-flash", "deepseek-v4-pro"],
+        "aliases": {
+          "max": "deepseek-v4-pro",
+          "middle": "deepseek-v4-flash",
+          "min": "deepseek-v4-flash"
+        },
+        "env": {}
       }
     }
   },
-  "features": {
-    "show_token_usage_on_card": true
-  },
-  "prompt": {
-    "group_thread_context_limit": 100,
-    "work_root": "../agent-workspace/workfolder"
-  },
-  "lark_cli": {
-    "command": "lark-cli",
-    "profile": "feishu-bot-server",
-    "timeout_seconds": 120
-  },
-  "session_store": {
-    "path": "data/session_map.json",
-    "retention_days": 90,
-    "max_links": 500,
-    "cleanup_interval_seconds": 3600
-  },
-  "scheduler": {
-    "host": "127.0.0.1",
-    "port": 8066,
-    "data_file": "data/tasks.json",
-    "tick_seconds": 60
-  },
-  "logging": {
-    "level": "INFO",
-    "dir": "logs",
-    "file_max_bytes": 104857600,
-    "backup_count": 5
-  },
-  "export_paths": [
-    "agent-workspace/memory",
-    "feishu-server/data",
-    "feishu-server/config.json",
-    "feishu-server/model.json"
-  ]
+  "server": {
+    "base_url": "https://open.feishu.cn/open-apis",
+    "lark_cli": {
+      "command": "lark-cli",
+      "profile": "feishu-bot-server",
+      "timeout_seconds": 120
+    },
+    "session_store": {
+      "path": "feishu-server/data/session_map.json",
+      "retention_days": 90,
+      "max_links": 500,
+      "cleanup_interval_seconds": 3600
+    },
+    "scheduler": {
+      "host": "127.0.0.1",
+      "port": 8066,
+      "data_file": "feishu-server/data/tasks.json",
+      "tick_seconds": 60
+    },
+    "logging": {
+      "level": "INFO",
+      "dir": "feishu-server/logs",
+      "file_max_bytes": 104857600,
+      "backup_count": 5
+    }
+  }
 }

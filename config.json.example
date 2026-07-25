@@ -1,0 +1,18 @@
+// 自定义配置，可覆盖 feishu-server/config.json 中的默认值。dict 递归合并，list / 标量整体替换
+// 典型的用法是用来自定义你使用的cli和模型，比如下面的例子，会把默认模型指定为claude，并更换默认模型
+{
+  "ai": {
+    "default_tool": "claude",
+    "tools": {
+      "claude": {
+        "default_model": "deepseek-v4-flash",
+        "model_list": ["deepseek-v4-flash", "deepseek-v4-pro"],
+        "aliases": {
+          "max": "deepseek-v4-pro",
+          "middle": "deepseek-v4-flash",
+          "min": "deepseek-v4-flash"
+        }
+      }
+    }
+  }
+}

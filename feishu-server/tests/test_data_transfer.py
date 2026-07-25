@@ -49,9 +49,9 @@ class DataTransferTests(unittest.TestCase):
         with self.assertRaises(DataTransferError):
             resolve_export_files(["nonexistent/*.xyz"], self.root)
 
-    def test_resolve_missing_path_raises(self):
-        with self.assertRaises(DataTransferError):
-            resolve_export_files(["nonexistent/dir"], self.root)
+    def test_resolve_missing_path_is_skipped(self):
+        files = resolve_export_files(["nonexistent/dir"], self.root)
+        self.assertEqual(files, [])
 
     def test_resolve_deduplicates(self):
         files = resolve_export_files(

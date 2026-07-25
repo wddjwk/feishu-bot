@@ -2,6 +2,7 @@
 .venv/
 .server.pid
 pending_restart.json
+/config.json
 feishu-server/data/
 feishu-server/logs/
 agent-workspace/workfolder/

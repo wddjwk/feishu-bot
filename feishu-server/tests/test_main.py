@@ -6,11 +6,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 import main
+from config import Config
 
 
 class FakeConfig:
     def version(self):
         return "v1.2.3"
+
+    def get(self, dotted, default=None):
+        return default
+
+    def current_tool(self):
+        return "claude"
+
+    def resolve_model(self, tool=None, requested=None):
+        return "model-x"
 
 
 class FakeMessenger:
@@ -56,6 +66,29 @@ class StartupNotificationTests(unittest.TestCase):
         content = messenger.sent[0]["card"]["body"]["elements"][0]["content"]
         self.assertIn("当前版本：`v1.2.3`", content)
         self.assertIn("更新完成", content)
+
+    def test_default_tool_falls_back_when_default_binary_missing(self):
+        config = Config()
+        with patch("main.shutil.which", side_effect=lambda cmd: "/fake/qodercli" if cmd == "qodercli" else None):
+            main.apply_default_tool_fallback(config)
+
+        self.assertEqual(config.current_tool(), "qoder")
+
+    def test_startup_message_lists_cli_and_availability(self):
+        config = Config()
+        messenger = FakeMessenger()
+        with (
+            patch("main.shutil.which", return_value="/fake/path"),
+            patch.dict(main.os.environ, {"MAINTAINER_OPEN_ID": "ou_abcdefgh"}, clear=True),
+            patch.object(main.threading, "Timer", ImmediateTimer),
+        ):
+            main.send_startup_notifications(config, messenger)
+
+        self.assertEqual(len(messenger.sent), 1)
+        content = messenger.sent[0]["card"]["body"]["elements"][0]["content"]
+        self.assertIn("当前 CLI", content)
+        self.assertIn("CLI 可用性", content)
+        self.assertIn("qoder", content)
 
     def test_private_rotating_log_handler_creates_owner_only_file(self):
         import logger

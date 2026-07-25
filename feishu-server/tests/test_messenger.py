@@ -8,7 +8,7 @@ from utils.lark_cli_wrapper import LarkCliError
 
 class FakeConfig:
     def get(self, dotted: str, default=None):
-        if dotted == "feishu.base_url":
+        if dotted == "server.base_url":
             return "https://open.feishu.cn/open-apis"
         return default
 

@@ -220,10 +220,10 @@ class AIRunner:
             return AIResult(False, tool or "", model or "", error=str(exc), usage=TokenUsage())
         prompt_text = prompt if isinstance(prompt, str) else json.dumps(prompt, ensure_ascii=False, indent=2)
         if spec.prompt_transport == "argument":
-            max_argument_bytes = int(self.config.get("ai.max_argument_prompt_bytes", 100_000))
+            max_argument_bytes = int(self.config.get("ai.max_prompt_length_bytes", 100_000))
             prompt_bytes = len(prompt_text.encode("utf-8"))
             if max_argument_bytes <= 0:
-                error = "ai.max_argument_prompt_bytes 必须大于 0"
+                error = "ai.max_prompt_length_bytes 必须大于 0"
                 logger.error("无法准备 AI 执行：%s", error)
                 return AIResult(False, selected_tool, selected_model, error=error, usage=TokenUsage())
             if prompt_bytes > max_argument_bytes:

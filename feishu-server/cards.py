@@ -21,14 +21,14 @@ _tool_icons: dict[str, str] = {}
 def configure_card_width(width: str) -> None:
     normalized = width.strip().lower()
     if normalized not in CARD_WIDTHS:
-        raise ValueError(f"feishu.card_width 必须为以下值之一：{', '.join(sorted(CARD_WIDTHS))}")
+        raise ValueError(f"options.card_width 必须为以下值之一：{', '.join(sorted(CARD_WIDTHS))}")
     global _card_width
     _card_width = normalized
 
 
 def configure_tool_icons(icons: dict[str, Any]) -> None:
     if not all(isinstance(tool, str) and isinstance(icon, str) and icon for tool, icon in icons.items()):
-        raise ValueError("feishu.tool_icons 必须是 CLI 名称到非空图标字符串的映射")
+        raise ValueError("工具图标必须是 CLI 名称到非空图标字符串的映射")
     global _tool_icons
     _tool_icons = dict(icons)
 

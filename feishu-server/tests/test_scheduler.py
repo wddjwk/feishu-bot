@@ -15,16 +15,16 @@ class FakeConfig:
 
     def resolve_path(self, dotted: str) -> Path:
         values = {
-            "scheduler.data_file": self.root / "data" / "tasks.json",
+            "server.scheduler.data_file": self.root / "data" / "tasks.json",
             "ai.workspace": self.root / "workspace",
         }
         return values[dotted]
 
     def get(self, dotted: str, default=None):
         values = {
-            "scheduler.host": "127.0.0.1",
-            "scheduler.port": 8066,
-            "scheduler.tick_seconds": 60,
+            "server.scheduler.host": "127.0.0.1",
+            "server.scheduler.port": 8066,
+            "server.scheduler.tick_seconds": 60,
         }
         return values.get(dotted, default)
 

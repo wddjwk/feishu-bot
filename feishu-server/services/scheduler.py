@@ -124,12 +124,12 @@ class Scheduler:
         self.config = config
         self.messenger = messenger
         self.ai_runner = ai_runner
-        self.path = config.resolve_path("scheduler.data_file")
+        self.path = config.resolve_path("server.scheduler.data_file")
         self.workspace = config.resolve_path("ai.workspace")
         self.script_root = self.workspace / "scheduler"
-        self.host = str(config.get("scheduler.host", "127.0.0.1"))
-        self.port = int(config.get("scheduler.port", 8066))
-        self.tick_seconds = int(config.get("scheduler.tick_seconds", 60))
+        self.host = str(config.get("server.scheduler.host", "127.0.0.1"))
+        self.port = int(config.get("server.scheduler.port", 8066))
+        self.tick_seconds = int(config.get("server.scheduler.tick_seconds", 60))
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._tasks: dict[str, ScheduledTask] = {}
@@ -267,7 +267,7 @@ class Scheduler:
                 result.model,
                 result.result,
                 result.thinking,
-                usage=result.usage if self.config.get("features.show_token_usage_on_card", True) else None,
+                usage=result.usage if self.config.get("options.features.show_token_usage_on_card", True) else None,
             ), result.result
         return cards.build_error_card("AI 定时任务失败", result.error or "未能获取有效输出", result.stderr), result.error or result.stderr
 
