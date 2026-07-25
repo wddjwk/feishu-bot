@@ -12,6 +12,8 @@ from services.ai_runner import (
     CopilotParser,
     PiParser,
     QoderCliParser,
+    ThoughtPart,
+    format_thinking,
     get_parser,
     parse_output,
 )
@@ -29,7 +31,7 @@ class ParseOutputTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.session_id, "s1")
         self.assertEqual(result.result, "final answer")
-        self.assertIn("🧠 Thinking", result.thinking)
+        self.assertIn("🧠 Thinking", format_thinking(result.parts))
         self.assertEqual(result.usage.input_tokens, 3)
         self.assertEqual(result.usage.output_tokens, 4)
 
@@ -41,8 +43,8 @@ class ParseOutputTests(unittest.TestCase):
             ]
         )
         result = parse_output("claude-stream-json", stdout)
-        self.assertIn("📚 Skill scheduler", result.thinking)
-        self.assertIn("🛠 Tool bash", result.thinking)
+        self.assertIn("📚 Skill scheduler", format_thinking(result.parts))
+        self.assertIn("🛠 Tool bash", format_thinking(result.parts))
         self.assertEqual(result.result, "ok")
 
     def test_copilot_reasoning_delta_not_duplicated(self):
@@ -54,7 +56,7 @@ class ParseOutputTests(unittest.TestCase):
             ]
         )
         result = parse_output("copilot-json", stdout)
-        self.assertEqual(result.thinking, "step 1")
+        self.assertEqual(format_thinking(result.parts), "🧠 Thinking\nstep 1")
         self.assertEqual(result.result, "done")
         self.assertEqual(result.session_id, "abc")
 
@@ -491,19 +493,19 @@ class InlineThinkingTests(unittest.TestCase):
         stdout = '{"type":"result","result":"<think>step 1</think>ok"}\n'
         result = parse_output("claude-stream-json", stdout)
         self.assertEqual(result.result, "ok")
-        self.assertIn("step 1", result.thinking)
+        self.assertIn("step 1", format_thinking(result.parts))
 
     def test_claude_result_strips_thinking_tag(self):
         stdout = '{"type":"result","result":"<thinking>step 1</thinking>ok"}\n'
         result = parse_output("claude-stream-json", stdout)
         self.assertEqual(result.result, "ok")
-        self.assertIn("step 1", result.thinking)
+        self.assertIn("step 1", format_thinking(result.parts))
 
     def test_pi_turn_end_strips_think_tag(self):
         stdout = '{"type":"turn_end","message":{"stopReason":"stop","content":[{"type":"text","text":"<think>step 1</think>ok"}]}}\n'
         result = parse_output("pi-json", stdout)
         self.assertEqual(result.result, "ok")
-        self.assertIn("step 1", result.thinking)
+        self.assertIn("step 1", format_thinking(result.parts))
 
     def test_pi_text_delta_strips_think_tag(self):
         stdout = (
@@ -512,7 +514,7 @@ class InlineThinkingTests(unittest.TestCase):
         )
         result = parse_output("pi-json", stdout)
         self.assertEqual(result.result, "ok")
-        self.assertIn("step 1", result.thinking)
+        self.assertIn("step 1", format_thinking(result.parts))
 
     def test_claude_assistant_text_strips_inline_thinking(self):
         stdout = (
@@ -521,7 +523,7 @@ class InlineThinkingTests(unittest.TestCase):
         )
         result = parse_output("claude-stream-json", stdout)
         self.assertEqual(result.result, "ok")
-        self.assertIn("reasoning", result.thinking)
+        self.assertIn("reasoning", format_thinking(result.parts))
 
 
 class PiToolPairingTests(unittest.TestCase):
@@ -566,21 +568,59 @@ class PiToolPairingTests(unittest.TestCase):
         result = parse_output("pi-json", stdout)
 
         # each call rendered once (no toolcall_end / tool_execution_start duplication)
-        self.assertEqual(result.thinking.count("🛠 Tool web_search"), 1)
-        self.assertEqual(result.thinking.count("🛠 Tool bash"), 1)
+        self.assertEqual(format_thinking(result.parts).count("🛠 Tool web_search"), 1)
+        self.assertEqual(format_thinking(result.parts).count("🛠 Tool bash"), 1)
         # paired by id: call_00's result is search-out even though bash-out arrived first
-        self.assertIn("search-out", result.thinking)
-        self.assertIn("bash-out", result.thinking)
+        self.assertIn("search-out", format_thinking(result.parts))
+        self.assertIn("bash-out", format_thinking(result.parts))
         # call order: call_00 + its result before call_01 + its result
-        i_call0 = result.thinking.index("🛠 Tool web_search")
-        i_res0 = result.thinking.index("search-out")
-        i_call1 = result.thinking.index("🛠 Tool bash")
-        i_res1 = result.thinking.index("bash-out")
+        i_call0 = format_thinking(result.parts).index("🛠 Tool web_search")
+        i_res0 = format_thinking(result.parts).index("search-out")
+        i_call1 = format_thinking(result.parts).index("🛠 Tool bash")
+        i_res1 = format_thinking(result.parts).index("bash-out")
         self.assertLess(i_call0, i_res0)
         self.assertLess(i_res0, i_call1)
         self.assertLess(i_call1, i_res1)
         # final turn text captured as the reply
         self.assertEqual(result.result, "done")
+
+
+class FormatThinkingTests(unittest.TestCase):
+    """中间层 format_thinking：emoji 渲染 + 按 config 截断 tool result。"""
+
+    @staticmethod
+    def _cfg(limit):
+        class C:
+            def get(self, dotted, default=None):
+                return limit if dotted == "options.features.show_max_tool_result_length" else default
+        return C()
+
+    def test_truncates_tool_result_per_config(self):
+        parts = [
+            ThoughtPart("tool_use", name="read", args={"path": "a"}),
+            ThoughtPart("tool_result", text="x" * 600),
+            ThoughtPart("thinking", text="summary"),
+        ]
+        out = format_thinking(parts, self._cfg(50))
+        self.assertIn("[truncated]", out)
+        self.assertIn("🛠 Tool read", out)
+        self.assertIn("🧠 Thinking\nsummary", out)
+        # no config -> no truncation
+        self.assertNotIn("[truncated]", format_thinking(parts))
+
+    def test_parser_emits_structured_parts(self):
+        stdout = (
+            '{"type":"assistant","message":{"content":['
+            '{"type":"tool_use","name":"bash","input":{"command":"ls"}},'
+            '{"type":"tool_result","content":[{"type":"text","text":"out"}]}'
+            ']}}\n{"type":"result","result":"done"}'
+        )
+        result = parse_output("claude-stream-json", stdout)
+        kinds = [p.kind for p in result.parts]
+        self.assertIn("tool_use", kinds)
+        self.assertIn("tool_result", kinds)
+        tool_result = next(p for p in result.parts if p.kind == "tool_result")
+        self.assertEqual(tool_result.text, "out")
 
 
 if __name__ == "__main__":

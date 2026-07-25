@@ -18,7 +18,7 @@ from typing import Any
 
 import cards
 from config import Config, ConfigError
-from services.ai_runner import AIRunner
+from services.ai_runner import AIRunner, format_thinking
 from services.messenger import FeishuApiError, Messenger
 import logger
 
@@ -266,7 +266,7 @@ class Scheduler:
                 result.tool,
                 result.model,
                 result.result,
-                result.thinking,
+                format_thinking(result.parts, self.config),
                 usage=result.usage if self.config.get("options.features.show_token_usage_on_card", True) else None,
             ), result.result
         return cards.build_error_card("AI 定时任务失败", result.error or "未能获取有效输出", result.stderr), result.error or result.stderr

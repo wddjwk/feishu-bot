@@ -24,11 +24,22 @@ class TokenUsage:
 
 
 @dataclass
+class ThoughtPart:
+    """parser 产出的标准化结构化片段；由中间层 format_thinking 渲染成展示字符串。"""
+
+    kind: str  # "thinking" | "tool_use" | "tool_result" | "tool_partial" | "text"
+    text: str = ""
+    name: str = ""  # tool_use: 工具名
+    args: Any = None  # tool_use: 原始参数
+    is_error: bool = False  # tool_result
+
+
+@dataclass
 class AIResult:
     ok: bool
     tool: str
     model: str
-    thinking: str = ""
+    parts: list[ThoughtPart] = field(default_factory=list)
     result: str = ""
     usage: TokenUsage | None = None
     session_id: str | None = None
@@ -281,7 +292,7 @@ class AIRunner:
                 False,
                 selected_tool,
                 selected_model,
-                thinking=stdout,
+                parts=[ThoughtPart("text", text=stdout)] if stdout else [],
                 stderr=stderr,
                 exit_code=process.returncode,
                 error=f"AI 进程在 {timeout} 秒后超时",
@@ -422,21 +433,20 @@ class BaseOutputParser:
 
     def _finalize(self, ctx: "_ParseContext", stderr: str) -> AIResult:
         if ctx.reasoning_delta_parts:
-            ctx.thinking_parts.extend(ctx.reasoning_delta_parts)
+            ctx.thinking_parts.extend(ThoughtPart("thinking", text=t) for t in ctx.reasoning_delta_parts)
         elif ctx.reasoning_final_parts:
-            ctx.thinking_parts.extend(ctx.reasoning_final_parts)
+            ctx.thinking_parts.extend(ThoughtPart("thinking", text=t) for t in ctx.reasoning_final_parts)
         _merge_usage(ctx.usage, _usage_from_stderr(stderr))
         if ctx.content_delta_parts and not ctx.result_parts:
             ctx.result_parts.append("".join(ctx.content_delta_parts).strip())
         result = "\n".join(part for part in ctx.result_parts if part).strip()
         if not result:
             result = _fallback_result(ctx.content_parts or ctx.thinking_parts)
-        thinking = "\n".join(part for part in ctx.thinking_parts if part).strip()
         return AIResult(
             ok=bool(result) and not ctx.saw_error,
             tool=self.name,
             model="",
-            thinking=thinking,
+            parts=list(ctx.thinking_parts),
             result=result,
             usage=ctx.usage,
             session_id=ctx.session_id,
@@ -472,9 +482,8 @@ class ClaudeParser(BaseOutputParser):
             sid = event.get("session_id")
             if isinstance(sid, str) and sid:
                 ctx.session_id = ctx.session_id or sid
-            thinking_text, body_text = _split_assistant_content(event)
-            if thinking_text:
-                ctx.thinking_parts.append(thinking_text)
+            process_parts, body_text = _split_assistant_content(event)
+            ctx.thinking_parts.extend(process_parts)
             if body_text:
                 ctx.content_parts.append(_strip_inline_thinking(ctx, body_text))
             return
@@ -622,7 +631,7 @@ class PiParser(BaseOutputParser):
                         if block_type == "thinking":
                             text = block.get("thinking") or block.get("text") or ""
                             if text:
-                                ctx.thinking_parts.append(f"🧠 Thinking\n{text}")
+                                ctx.thinking_parts.append(ThoughtPart("thinking", text=text))
                         elif block_type == "text":
                             text = block.get("text") or ""
                             if text:
@@ -631,7 +640,7 @@ class PiParser(BaseOutputParser):
                                     if is_final:
                                         ctx.result_parts.append(clean)
                                     else:
-                                        ctx.thinking_parts.append(clean)
+                                        ctx.thinking_parts.append(ThoughtPart("text", text=clean))
             self._flush_turn(ctx)
             return
         # agent_end / agent_settled / message_start / message_end: no-op
@@ -736,7 +745,7 @@ class CopilotParser(BaseOutputParser):
 class _ParseContext:
     usage: TokenUsage = field(default_factory=TokenUsage)
     session_id: str | None = None
-    thinking_parts: list[str] = field(default_factory=list)
+    thinking_parts: list[ThoughtPart] = field(default_factory=list)
     result_parts: list[str] = field(default_factory=list)
     content_parts: list[str] = field(default_factory=list)
     content_delta_parts: list[str] = field(default_factory=list)
@@ -766,10 +775,10 @@ def _event_type(event: dict[str, Any]) -> str:
 
 
 def _dispatch_process_event(ctx: _ParseContext, event: dict[str, Any], event_type: str) -> bool:
-    """如果是工具调用/推理过程事件，格式化到思考流并返回 True。"""
-    process_text = _format_process_event(event, event_type)
-    if process_text:
-        ctx.thinking_parts.append(process_text)
+    """如果是工具调用/推理过程事件，提取为 ThoughtPart 并返回 True。"""
+    parts = _format_process_event(event, event_type)
+    if parts:
+        ctx.thinking_parts.extend(parts)
         return True
     return False
 
@@ -786,16 +795,16 @@ def _dispatch_result(ctx: _ParseContext, event: dict[str, Any], event_type: str)
     return True
 
 
-def _split_assistant_content(event: dict[str, Any]) -> tuple[str, str]:
+def _split_assistant_content(event: dict[str, Any]) -> tuple[list[ThoughtPart], str]:
     """从 assistant 事件的 message.content[] 中分离过程流（思考/工具）与正文（text/markdown）。
 
-    thinking/reasoning/tool_use 等过程块使用与 _format_process_event 一致的 emoji 前缀格式，
-    以保证卡片中"分析过程"区域的展示效果统一；text/markdown 块原样拼接到正文流。
+    thinking/reasoning/tool_use/tool_result 等过程块以 ThoughtPart 形式返回；text/markdown
+    块原样拼接到正文流。
     """
     content = _event_content_blocks(event)
     if not isinstance(content, list):
-        return "", _extract_text(content)
-    process_parts: list[str] = []
+        return [], _extract_text(content)
+    process_parts: list[ThoughtPart] = []
     text_parts: list[str] = []
     for block in content:
         if not isinstance(block, dict):
@@ -807,18 +816,18 @@ def _split_assistant_content(event: dict[str, Any]) -> tuple[str, str]:
         if block_type in {"thinking", "reasoning"}:
             text = _extract_text(block.get("thinking") or block.get("text") or block.get("content") or block)
             if text:
-                process_parts.append(f"🧠 Thinking\n{text}")
+                process_parts.append(ThoughtPart("thinking", text=text))
         elif block_type in {"tool_use", "tool_call", "server_tool_use"}:
             process_parts.append(_format_tool_use(block))
         elif block_type in {"tool_result", "tool_response"}:
             text = _extract_text(block.get("content") or block.get("result") or block)
             if text:
-                process_parts.append(f"📎 Tool result\n{text}")
+                process_parts.append(ThoughtPart("tool_result", text=text))
         elif block_type in {"text", "markdown"}:
             text = _extract_text(block.get("text") or block.get("content") or block)
             if text:
                 text_parts.append(text)
-    return "\n\n".join(process_parts), "\n".join(text_parts)
+    return process_parts, "\n".join(text_parts)
 
 
 _THINKING_INLINE_RE = re.compile(r"<think(?:ing)?>(.*?)</think(?:ing)?>", re.DOTALL)
@@ -837,22 +846,23 @@ def _strip_inline_thinking(ctx: _ParseContext, text: str) -> str:
         clean_parts.append(text[last:match.start()])
         thinking = match.group(1).strip()
         if thinking:
-            ctx.thinking_parts.append(f"🧠 Thinking\n{thinking}")
+            ctx.thinking_parts.append(ThoughtPart("thinking", text=thinking))
         last = match.end()
     clean_parts.append(text[last:])
     return "".join(clean_parts).strip()
 
 
-def _fallback_result(parts: list[str]) -> str:
+def _fallback_result(parts: list[Any]) -> str:
     for part in reversed(parts):
-        cleaned = part.strip()
+        text = part.text if isinstance(part, ThoughtPart) else str(part)
+        cleaned = text.strip()
         if cleaned:
             return cleaned
     return ""
 
 
-def _pi_toolcall(inner: dict[str, Any]) -> tuple[str, str]:
-    """Extract (callId, formatted call text) from a pi toolcall_end event.
+def _pi_toolcall(inner: dict[str, Any]) -> tuple[str, ThoughtPart]:
+    """Extract (callId, tool_use part) from a pi toolcall_end event.
 
     toolcall_end carries the complete toolCall block (id + name + full arguments);
     the id matches the toolCallId on tool_execution_* events, enabling pairing.
@@ -882,72 +892,66 @@ def _pi_toolcall(inner: dict[str, Any]) -> tuple[str, str]:
     return call_id, _format_tool_use({"name": name, "input": args})
 
 
-def _format_pi_tool_execution(event: dict[str, Any]) -> str:
-    """Format a pi tool_execution_start event as a tool-call line."""
+def _format_pi_tool_execution(event: dict[str, Any]) -> ThoughtPart:
+    """Extract a tool_use part from a pi tool_execution_start event."""
     name = str(event.get("toolName") or "tool")
     return _format_tool_use({"name": name, "input": event.get("args")})
 
 
-def _format_pi_tool_result(event: dict[str, Any]) -> str:
-    """Format a pi tool_execution_end event as a tool-result line. Full content, no truncation."""
-    label = "📎 Tool result (error)" if event.get("isError") else "📎 Tool result"
+def _format_pi_tool_result(event: dict[str, Any]) -> ThoughtPart | None:
+    """Extract a tool_result part from a pi tool_execution_end event (full content)."""
     text = _extract_text(event.get("toolResult") or event.get("result") or "")
-    return f"{label}\n{text}" if text else ""
-
-
-def _format_pi_tool_partial(event: dict[str, Any]) -> str:
-    """Format a pi tool_execution_update event (streaming partialResult). Full content."""
-    partial = event.get("partialResult")
-    text = _extract_text(partial)
     if not text:
-        return ""
-    return f"📎 Tool partial\n{text}"
+        return None
+    return ThoughtPart(kind="tool_result", text=text, is_error=bool(event.get("isError")))
 
 
-def _format_copilot_tool_request(data: dict[str, Any]) -> str:
-    """Format copilot tool request (from assistant.tool_call_delta or assistant.message.toolRequests[])."""
+def _format_pi_tool_partial(event: dict[str, Any]) -> ThoughtPart | None:
+    """Extract a tool_partial part from a pi tool_execution_update event."""
+    text = _extract_text(event.get("partialResult"))
+    if not text:
+        return None
+    return ThoughtPart(kind="tool_partial", text=text)
+
+
+def _format_copilot_tool_request(data: dict[str, Any]) -> ThoughtPart:
+    """Extract a tool_use part from copilot tool request data."""
     name = str(data.get("toolName") or data.get("name") or "tool")
     args = data.get("arguments") or data.get("inputDelta") or data.get("args")
     return _format_tool_use({"name": name, "input": args})
 
 
-def _format_copilot_tool_execution(event: dict[str, Any]) -> str:
-    """Format copilot tool.execution_complete/partial_result events.
+def _format_copilot_tool_execution(event: dict[str, Any]) -> ThoughtPart | None:
+    """Extract a tool result/partial part from copilot tool.execution_* events.
 
-    tool.execution_start is handled upstream (skipped here — its toolName+arguments
-    duplicate assistant.message.toolRequests[]; we prefer the complete form).
-    execution_complete carries the execution outcome (success/error/result), which
-    is unique to execution and not duplicated anywhere else.
+    tool.execution_start is skipped (its toolName+arguments duplicate
+    assistant.message.toolRequests[]); execution_complete carries the outcome.
     """
     event_type = str(event.get("type") or "")
     data = event.get("data")
     if not isinstance(data, dict):
-        return ""
+        return None
     if event_type.endswith("execution_start"):
-        # Duplicate of assistant.message.toolRequests[] — skip
-        return ""
+        return None
     if event_type.endswith("execution_complete"):
         err = data.get("error")
         if isinstance(err, dict) and err.get("message"):
-            return f"📎 Tool result (error)\n{err['message']}"
+            return ThoughtPart(kind="tool_result", text=str(err["message"]), is_error=True)
         if data.get("success") is False:
-            return "📎 Tool result (error)\nfailed"
-        # success=true: render the result if present; otherwise absence of failure has no payload
-        result = data.get("result")
-        text = _extract_text(result)
+            return ThoughtPart(kind="tool_result", text="failed", is_error=True)
+        text = _extract_text(data.get("result"))
         if text:
-            return f"📎 Tool result\n{text}"
-        return ""
+            return ThoughtPart(kind="tool_result", text=text)
+        return None
     if event_type.endswith("partial_result"):
-        result = data.get("result") or data.get("partialResult")
-        text = _extract_text(result)
+        text = _extract_text(data.get("result") or data.get("partialResult"))
         if text:
-            return f"📎 Tool partial\n{text}"
-    return ""
+            return ThoughtPart(kind="tool_partial", text=text)
+    return None
 
 
-def _format_process_event(event: dict[str, Any], event_type: str) -> str:
-    parts: list[str] = []
+def _format_process_event(event: dict[str, Any], event_type: str) -> list[ThoughtPart]:
+    parts: list[ThoughtPart] = []
     content = _event_content_blocks(event)
     if isinstance(content, list):
         for block in content:
@@ -957,21 +961,21 @@ def _format_process_event(event: dict[str, Any], event_type: str) -> str:
             if block_type in {"thinking", "reasoning", "reasoning_delta"}:
                 text = _extract_text(block.get("thinking") or block.get("text") or block.get("content") or block)
                 if text:
-                    parts.append(f"🧠 Thinking\n{text}")
+                    parts.append(ThoughtPart("thinking", text=text))
             elif block_type in {"tool_use", "tool_call", "server_tool_use"}:
                 parts.append(_format_tool_use(block))
             elif block_type in {"tool_result", "tool_response"}:
                 text = _extract_text(block.get("content") or block.get("result") or block)
                 if text:
-                    parts.append(f"📎 Tool result\n{text}")
+                    parts.append(ThoughtPart("tool_result", text=text))
     if not parts and "tool" in event_type:
         if "result" in event_type or "response" in event_type:
             text = _extract_text(event.get("data") or event.get("result") or event)
             if text:
-                parts.append(f"📎 Tool result\n{text}")
+                parts.append(ThoughtPart("tool_result", text=text))
         else:
             parts.append(_format_tool_use(event.get("data") if isinstance(event.get("data"), dict) else event))
-    return "\n\n".join(part for part in parts if part)
+    return parts
 
 
 def _event_content_blocks(event: dict[str, Any]) -> Any:
@@ -984,16 +988,11 @@ def _event_content_blocks(event: dict[str, Any]) -> Any:
     return event.get("content")
 
 
-def _format_tool_use(block: dict[str, Any]) -> str:
+def _format_tool_use(block: dict[str, Any]) -> ThoughtPart:
+    """Extract a tool_use part (name + raw args). Emoji/compact/skill rendering lives in format_thinking."""
     name = str(block.get("name") or block.get("tool_name") or block.get("tool") or block.get("function") or "tool")
-    payload = block.get("input") or block.get("arguments") or block.get("args") or block.get("parameters")
-    if name.lower() in {"skill", "skills"}:
-        skill_name = ""
-        if isinstance(payload, dict):
-            skill_name = str(payload.get("skill") or payload.get("name") or "")
-        return f"📚 Skill {skill_name}".strip()
-    detail = _compact_json(payload)
-    return f"🛠 Tool {name}" + (f"\n{detail}" if detail else "")
+    args = block.get("input") or block.get("arguments") or block.get("args") or block.get("parameters")
+    return ThoughtPart(kind="tool_use", name=name, args=args)
 
 
 def _compact_json(value: Any) -> str:
@@ -1005,6 +1004,69 @@ def _compact_json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     except TypeError:
         return str(value)
+
+
+def format_thinking(parts: list[ThoughtPart], config: Any = None) -> str:
+    """中间格式化层：把 parser 产出的结构化 parts 渲染为展示字符串。
+
+    所有展示变换集中在此——加 emoji、截断 tool result。parser 只产 parts，不负责格式。
+    config 为 None 时不截断（供测试/调试）。
+    """
+    limit = _tool_result_limit(config)
+    out: list[str] = []
+    for part in parts:
+        rendered = _render_part(part, limit)
+        if rendered:
+            out.append(rendered)
+    return "\n".join(out).strip()
+
+
+def _render_part(part: ThoughtPart, limit: int) -> str:
+    if part.kind == "thinking" and part.text:
+        return f"🧠 Thinking\n{part.text}"
+    if part.kind == "tool_use":
+        return _render_tool_use(part)
+    if part.kind == "tool_result":
+        text = _truncate(part.text, limit)
+        if not text:
+            return ""
+        label = "📎 Tool result (error)" if part.is_error else "📎 Tool result"
+        return f"{label}\n{text}"
+    if part.kind == "tool_partial":
+        text = _truncate(part.text, limit)
+        if not text:
+            return ""
+        return f"📎 Tool partial\n{text}"
+    if part.kind == "text" and part.text:
+        return part.text
+    return ""
+
+
+def _render_tool_use(part: ThoughtPart) -> str:
+    name = part.name or "tool"
+    if name.lower() in {"skill", "skills"}:
+        skill_name = ""
+        if isinstance(part.args, dict):
+            skill_name = str(part.args.get("skill") or part.args.get("name") or "")
+        return f"📚 Skill {skill_name}".strip()
+    detail = _compact_json(part.args)
+    return f"🛠 Tool {name}" + (f"\n{detail}" if detail else "")
+
+
+def _tool_result_limit(config: Any) -> int:
+    get = getattr(config, "get", None)
+    if not callable(get):
+        return 0
+    try:
+        return int(get("options.features.show_max_tool_result_length", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _truncate(text: str, limit: int) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + "\n[truncated]"
 
 
 def _extract_text(value: Any) -> str:

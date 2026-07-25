@@ -12,7 +12,7 @@ import cards
 import commands
 from config import Config, ConfigError
 from handlers import BaseHandler
-from services.ai_runner import AIRunner
+from services.ai_runner import AIRunner, format_thinking
 from services.messenger import FeishuApiError, Messenger
 from services.prompt_builder import build_prompt, extract_text, is_standalone_file_message, normalize_event
 from services.session_store import SessionStore
@@ -178,7 +178,7 @@ class MessageHandler(BaseHandler):
                             result.tool,
                             result.model,
                             result_text or "任务已完成。",
-                            result.thinking,
+                            format_thinking(result.parts, self.config),
                             usage=result.usage if self.config.get("options.features.show_token_usage_on_card", True) else None,
                         )
                         try:
@@ -307,7 +307,7 @@ class MessageHandler(BaseHandler):
                 logger.info("已发送 AI 交付文件：请求消息=%s 文件消息=%s 路径=%s", message_id, delivered_message_id, path)
 
             status = completion_text or "文件已生成并发送。"
-            card = cards.build_ai_card(result.tool, result.model, status, result.thinking)
+            card = cards.build_ai_card(result.tool, result.model, status, format_thinking(result.parts, self.config))
             reply = self.messenger.reply_card(delivered_message_ids[-1], card, reply_in_thread=reply_in_thread)
         except (FeishuApiError, LarkCliError) as exc:
             logger.exception("发送 AI 交付文件失败：消息=%s 错误=%s", message_id, exc)
