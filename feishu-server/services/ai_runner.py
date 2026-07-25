@@ -1102,7 +1102,7 @@ def format_thinking(parts: list[ThoughtPart], config: Any = None) -> str:
         rendered = _render_part(part, limit)
         if rendered:
             out.append(rendered)
-    return "\n".join(out).strip()
+    return "\n\n".join(out).strip()
 
 
 def _render_part(part: ThoughtPart, limit: int) -> str:
