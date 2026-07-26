@@ -73,8 +73,5 @@ RUN git clone https://github.com/wddjwk/feishu-bot /home/bot/feishu-bot \
     && uv pip install -r feishu-server/requirements.txt \
     -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 
-COPY --chown=bot:bot docker/entrypoint.sh /home/bot/entrypoint.sh
-RUN chmod +x /home/bot/entrypoint.sh
-
 WORKDIR /home/bot/feishu-bot
-ENTRYPOINT ["/home/bot/entrypoint.sh"]
+CMD ["/bin/bash"]

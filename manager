@@ -221,11 +221,11 @@ import_data() {
 # ─── Docker mode ──────────────────────────────────────────────────────────────
 
 docker_exists() {
-  docker inspect "$DOCKER_CONTAINER" &>/dev/null
+  docker container inspect "$DOCKER_CONTAINER" &>/dev/null
 }
 
 docker_running() {
-  [[ "$(docker inspect -f '{{.State.Running}}' "$DOCKER_CONTAINER" 2>/dev/null)" == "true" ]]
+  [[ "$(docker container inspect -f '{{.State.Running}}' "$DOCKER_CONTAINER" 2>/dev/null)" == "true" ]]
 }
 
 docker_ensure_running() {
@@ -234,8 +234,7 @@ docker_ensure_running() {
     return 1
   fi
   if ! docker_running; then
-    err "Container '$DOCKER_CONTAINER' is not running. Start it first: $0 docker-start"
-    return 1
+    docker start "$DOCKER_CONTAINER" >/dev/null
   fi
 }
 
@@ -245,130 +244,27 @@ docker_build() {
   ok "Image '$DOCKER_IMAGE' built"
 }
 
-docker_start() {
-  if docker_running; then
-    warn "Container '$DOCKER_CONTAINER' is already running"
-    return 0
-  fi
+docker_create() {
   if docker_exists; then
-    docker start "$DOCKER_CONTAINER" >/dev/null
-    ok "Container '$DOCKER_CONTAINER' started"
-  else
-    err "Container '$DOCKER_CONTAINER' does not exist. See: $0 help"
-    return 1
-  fi
-}
-
-docker_stop() {
-  if ! docker_running; then
-    warn "Container '$DOCKER_CONTAINER' is not running"
+    warn "Container '$DOCKER_CONTAINER' already exists"
     return 0
   fi
-  docker stop "$DOCKER_CONTAINER" >/dev/null
-  ok "Container '$DOCKER_CONTAINER' stopped"
-}
-
-docker_status() {
-  if ! docker_exists; then
-    warn "Container '$DOCKER_CONTAINER' does not exist"
-    return 1
-  fi
-  local state started
-  state=$(docker inspect -f '{{.State.Status}}' "$DOCKER_CONTAINER")
-  started=$(docker inspect -f '{{.State.StartedAt}}' "$DOCKER_CONTAINER" | cut -dT -f1,2 | cut -d. -f1)
-  info "Container: $DOCKER_CONTAINER"
-  info "State: $state"
-  info "Started: $started"
-  if [[ "$state" == "running" ]]; then
-    docker top "$DOCKER_CONTAINER" -o pid,etime,rss,cmd 2>/dev/null | head -5
-  fi
-}
-
-docker_log() {
-  docker_ensure_running || return 1
-  info "Following container log (Ctrl+C to exit)"
-  exec docker exec "$DOCKER_CONTAINER" bash -c \
-    "tail -f \$(ls -t $DOCKER_APP/feishu-server/logs/feishu_server_*.log 2>/dev/null | head -1)"
-}
-
-docker_vlog() {
-  docker_ensure_running || return 1
-  local pattern="${1:-}"
-  if [[ -z "$pattern" ]]; then
-    exec docker exec -it "$DOCKER_CONTAINER" bash -c \
-      "vim \$(ls -t $DOCKER_APP/feishu-server/logs/feishu_server_*.log 2>/dev/null | head -1)"
-  else
-    exec docker exec -it "$DOCKER_CONTAINER" bash -c \
-      "vim \$(ls $DOCKER_APP/feishu-server/logs/*${pattern}*.log 2>/dev/null | head -1)"
-  fi
-}
-
-docker_update() {
-  docker_ensure_running || return 1
-  info "Pulling latest changes in container..."
-  docker exec "$DOCKER_CONTAINER" git -C "$DOCKER_APP" pull --ff-only
-  ok "Updated to $(docker exec "$DOCKER_CONTAINER" git -C "$DOCKER_APP" log --oneline -1)"
-  info "Restarting container..."
-  docker restart "$DOCKER_CONTAINER" >/dev/null
-  ok "Container restarted"
-}
-
-docker_deferred_restart() {
-  local delay="${1:-5}"
-  (sleep "$delay"; "$ROOT/manager" docker-restart) >/dev/null 2>&1 &
-  info "Deferred docker restart scheduled after ${delay}s"
-}
-
-docker_export() {
-  docker_ensure_running || return 1
-  local dest="${1:-.}"
-  local timestamp
-  timestamp=$(date +%Y%m%d-%H%M%S)
-  local zip_name="feishubot-data-${timestamp}.zip"
-
-  mkdir -p "$dest"
-
-  local paths=()
-  while IFS= read -r p; do
-    paths+=("$p")
-  done < <(get_user_data_paths)
-
-  docker exec "$DOCKER_CONTAINER" bash -c \
-    "cd $DOCKER_APP && zip -r /tmp/$zip_name ${paths[*]}"
-  docker cp "$DOCKER_CONTAINER:/tmp/$zip_name" "$dest/$zip_name"
-  docker exec "$DOCKER_CONTAINER" rm -f "/tmp/$zip_name"
-  ok "Exported to: $dest/$zip_name ($(du -h "$dest/$zip_name" | cut -f1))"
-}
-
-docker_import() {
-  docker_ensure_running || return 1
-  local zip_file="${1:-}"
-  if [[ -z "$zip_file" ]]; then
-    err "Usage: $0 docker-import <zip-file>"
-    return 1
-  fi
-  if [[ ! -f "$zip_file" ]]; then
-    err "File not found: $zip_file"
-    return 1
-  fi
-
-  local zip_name
-  zip_name=$(basename "$zip_file")
-  docker cp "$zip_file" "$DOCKER_CONTAINER:/tmp/$zip_name"
-  docker exec "$DOCKER_CONTAINER" bash -c \
-    "cd $DOCKER_APP && unzip -o /tmp/$zip_name && rm -f /tmp/$zip_name"
-  ok "Imported from: $zip_file"
+  docker run -dit \
+    --name "$DOCKER_CONTAINER" \
+    --hostname feishubot \
+    --restart unless-stopped \
+    "$DOCKER_IMAGE"
+  ok "Container '$DOCKER_CONTAINER' created. Enter with: $0 docker-shell"
 }
 
 docker_shell() {
-  if ! docker_exists; then
-    err "Container '$DOCKER_CONTAINER' does not exist. See: $0 help"
-    return 1
-  fi
-  if ! docker_running; then
-    docker start "$DOCKER_CONTAINER" >/dev/null
-  fi
+  docker_ensure_running || return 1
   exec docker exec -it "$DOCKER_CONTAINER" bash
+}
+
+docker_exec() {
+  docker_ensure_running || return 1
+  exec docker exec -it "$DOCKER_CONTAINER" "$DOCKER_APP/manager" "$@"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -376,30 +272,29 @@ docker_shell() {
 usage() {
   cat <<EOF
 Usage: $0 <command>
-All commands support docker- prefix to operate on container instead of local process.
 
-  start | docker-start            Start service
-  stop | docker-stop              Stop service
-  restart | docker-restart        Restart service
-  deferred-restart [sec] | docker-deferred-restart [sec]
-  status | docker-status          Show status
-  log | docker-log                Tail latest log
-  vlog [pat] | docker-vlog [pat]  Open log in editor
-  update | docker-update          Git pull + restart
-  export [dir] | docker-export [dir]
-  import <zip> | docker-import <zip>
-  docker-shell                    Enter container bash
-  docker-build                    Build image
+Lifecycle:
+  start                 Start service
+  stop                  Stop service
+  restart               Stop + start
+  deferred-restart [s]  Restart after delay (default 5s)
 
-Create container:
-  docker run -d \\
-    --name $DOCKER_CONTAINER --hostname feishubot --restart unless-stopped \\
-    -e FEISHU_APP_ID=cli_xxx \\
-    -e FEISHU_APP_SECRET=your_secret \\
-    -e MAINTAINER_OPEN_ID=ou_xxx \\
-    $DOCKER_IMAGE
+Monitoring:
+  status                Show service status
+  log                   Tail latest log
+  vlog [pattern]        Open log in editor
 
-Env: FEISHUBOT_IMAGE (default: feishubot), FEISHUBOT_CONTAINER (default: feishubot)
+Maintenance:
+  update                Git pull + restart
+  export [dir]          Export user data to zip
+  import <zip>          Import user data from zip
+
+Docker (docker-<command> forwards to container's ./manager <command>):
+  docker-build          Build image
+  docker-create         Create container
+  docker-shell          Enter container bash
+  docker-*              Same as above, but executed inside container. Like docker-start, docker-stop, docker-status, etc.
+
 EOF
 }
 
@@ -414,18 +309,10 @@ case "${1:-}" in
   update) update ;;
   export) export_data "${2:-.}" ;;
   import) import_data "${2:-}" ;;
-  docker-start) docker_start ;;
-  docker-stop) docker_stop ;;
-  docker-restart) docker_stop; docker_start ;;
-  docker-deferred-restart) docker_deferred_restart "${2:-5}" ;;
-  docker-status) docker_status ;;
-  docker-log) docker_log ;;
-  docker-vlog) docker_vlog "${2:-}" ;;
-  docker-update) docker_update ;;
-  docker-export) docker_export "${2:-.}" ;;
-  docker-import) docker_import "${2:-}" ;;
   docker-build) docker_build ;;
+  docker-create) docker_create ;;
   docker-shell) docker_shell ;;
+  docker-*) docker_exec "${1#docker-}" "${@:2}" ;;
   help|--help|-h) usage ;;
   *) usage >&2; exit 2 ;;
 esac

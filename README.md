@@ -35,12 +35,36 @@ FeishuBot 是一个飞书个人工作助手：你在飞书里发消息，它驱�
 
 ## 快速开始
 
-1. **准备飞书应用**：在飞书开放平台创建企业自建应用，启用机器人能力，订阅 `im.message.receive_v1`，配置消息 / 资源 / 表情权限并发布版本；拿到 App ID 和 App Secret。
-2. **配置 `.env`**：复制 `.env.example` 为 `.env`，填充你的 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`。
-3. **配置 你的CLI及模型(可跳过)**：复制 `config.json.example`，里面可以配置你的默认cli、模型等内容。不修改系统会选择默认值
-4. **启动**：`./manager start` 一键启动后台服务。用 `./manager status` 查状态、`./manager log` 看日志、`./manager stop` 停止。
+首先你需要在[飞书开放平台](https://open.feishu.cn/app?lang=zh-CN)，创建一个应用（飞书机器人）：
 
-如果配置了MAINTAINER_ID，启动后给机器人会自动给你发条飞书消息表示启动成功；发 `/help` 查看所有命令。
+1. 拿到 App ID 和 App Secret
+2. 订阅 `im.message.receive_v1`，配置消息 / 资源 / 表情权限并发布版本
+3. 启用 机器人能力
+
+然后本服务支持两种使用方式：
+
+### (1) 在本地运行
+
+`git clone` 本仓库到某个位置，然后进行下述配置：
+
+1. **配置 `.env`**：复制 `.env.example` 为 `.env`，填充你的 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`。
+   - 如果配置了MAINTAINER_ID，启动后给机器人会自动给你发条飞书消息表示启动成功；发 `/help` 查看所有命令。
+2. **配置 你的CLI及模型(可跳过)**：复制 `config.json.example`，里面可以配置你的默认cli、模型等内容。不修改系统会选择默认值
+3. **启动**：`./manager start` 一键启动后台服务。
+   - manager 是一个一键管理服务的脚本，可以用 `./manager status` 查状态、`./manager log` 看日志、`./manager stop` 停止等等
+
+这时使用的cli工具和lark-cli配置都是直接用的你本地已有的配置(~/.claude, ~/.codex等配置)
+
+### (2) 容器化部署
+
+本项目提供了Dockerfile，可构建镜像容器化部署（所有工具、CLI、依赖已预装）
+
+1. 构建镜像：`./manager docker-build`
+2. 创建容器：`./manager docker-create`
+3. 进入容器: `./manager docker-shell`
+4. 配置服务：进入容器之后，就跟在本地一样，按照上述方式进行配置 .env, config.json 即可
+5. 配置AI工具：与本地不同的是，本地环境你的claude/codex等cli工具是已经配置好的，在docker里面你需要按照已有settings.json重新配置一下。还有 `lark-cli login auth`授权一下用户身份（如果需要读写云文档的话）
+6. 启动服务：`./manager docker-start` 这会调用到容器内部的`manager`脚本并执行start（所以你直接在容器内 `./manager start` 启动是完全一样的）
 
 ## 更多配置
 
@@ -49,6 +73,7 @@ FeishuBot 是一个飞书个人工作助手：你在飞书里发消息，它驱�
 server会在使用过程中不断更新记忆，逐渐更懂你。当然你也可以预先就告诉它一些信息，直接给它注入灵魂
 
 在 `agent-workspace/memory/` 下面手动创建下列几个记忆文件
+
 1. `memory/SOUL.md`：向AI阐述你的个人信息，偏好，爱好，对AI的要求，你期望它给你的回复方式等等
 2. `memory/LONG_TERM.md`：长期记忆，目标是逐渐沉淀下来的可复用的经验。你如果有一些特殊需要、工作方法论，也可以加到这里面
 3. `memory/SHORT_TERM.md`：短期记忆，主要是AI更新。没有手动写的必要
