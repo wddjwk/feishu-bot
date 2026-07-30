@@ -95,7 +95,7 @@
         "command": "pi",
         "base_args": ["--print", "--model", "{model}", "--mode", "json", "--approve"],
         "session_args": ["--session-id", "{session_id}"],
-        "resume_args": ["--session-id", "{session_id}"],
+        "resume_args": ["--session", "{session_id}"],
         "prompt_transport": "stdin",
         "output_parser": "pi-json",
         "default_model": "deepseek-v4-flash",

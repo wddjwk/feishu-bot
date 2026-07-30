@@ -573,9 +573,6 @@ class PiParser(BaseOutputParser):
 
     def _handle_event(self, ctx: "_ParseContext", event: dict[str, Any], event_type: str) -> None:
         if event_type == "session":
-            sid = event.get("id")
-            if isinstance(sid, str) and sid:
-                ctx.session_id = ctx.session_id or sid
             return
         if event_type == "turn_start":
             self._reset_turn()
