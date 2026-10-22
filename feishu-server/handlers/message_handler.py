@@ -14,7 +14,7 @@ from config import Config, ConfigError
 from handlers import BaseHandler
 from services.ai_runner import AIRunner, format_thinking
 from services.messenger import FeishuApiError, Messenger
-from services.prompt_builder import build_prompt, extract_text, is_standalone_file_message, normalize_event
+from services.prompt_builder import build_prompt, extract_text, is_standalone_attachment_message, normalize_event
 from services.session_store import SessionStore
 from utils.file_delivery import extract_file_deliveries, is_image_file
 from utils.lark_cli_wrapper import LarkCliError
@@ -66,8 +66,8 @@ class MessageHandler(BaseHandler):
         if not self._should_handle(message):
             logger.debug("忽略未 @ 当前机器人的群消息：消息=%s", message_id)
             return
-        if is_standalone_file_message(message):
-            logger.info("收到独立文件消息，等待用户回复文件后再处理：消息=%s", message_id)
+        if is_standalone_attachment_message(message):
+            logger.info("收到独立文件/图片消息，等待用户回复后再处理：消息=%s", message_id)
             return
 
         text = extract_text(message).strip()

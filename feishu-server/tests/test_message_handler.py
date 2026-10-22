@@ -235,6 +235,52 @@ class MessageHandlerFlowTests(unittest.TestCase):
         self.assertEqual(messenger.replies, [])
         self.assertEqual(messenger.reactions, [])
 
+    def test_standalone_image_message_is_ignored(self):
+        messenger = FakeMessenger()
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-image",
+                "message_type": "image",
+                "content": json.dumps({"image_key": "img-key"}),
+                "create_time": "2",
+            }
+        )
+
+        handler.handle_event(event)
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(messenger.replies, [])
+        self.assertEqual(messenger.reactions, [])
+
+    def test_reply_to_image_downloads_it_and_starts_an_agent(self):
+        messenger = FakeMessenger()
+        messenger.get_message = lambda message_id: {
+            "message_id": message_id,
+            "message_type": "image",
+            "content": json.dumps({"image_key": "img-key"}),
+            "create_time": "1",
+        }
+        runner = FakeRunner()
+        handler = MessageHandler(FakeConfig(), messenger, runner, FakeSessionStore(), scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-reply-image",
+                "message_type": "text",
+                "parent_id": "m-image",
+                "content": json.dumps({"text": "请分析这张图片"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(len(runner.calls), 1)
+        self.assertIn("@", runner.calls[0]["prompt"])
+        self.assertIn("请分析这张图片", runner.calls[0]["prompt"])
+
     def test_reply_to_file_downloads_it_and_starts_an_agent(self):
         messenger = FakeMessenger()
         messenger.get_message = lambda message_id: {

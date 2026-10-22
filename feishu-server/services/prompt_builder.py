@@ -59,8 +59,8 @@ def normalize_message(message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def is_standalone_file_message(message: dict[str, Any]) -> bool:
-    return message.get("message_type") == "file" and not message.get("parent_id")
+def is_standalone_attachment_message(message: dict[str, Any]) -> bool:
+    return message.get("message_type") in {"file", "image"} and not message.get("parent_id")
 
 
 def build_prompt(

@@ -8,7 +8,7 @@ from services.prompt_builder import (
     build_prompt,
     extract_files,
     extract_text,
-    is_standalone_file_message,
+    is_standalone_attachment_message,
     normalize_message,
 )
 
@@ -189,8 +189,21 @@ class PromptBuilderTests(unittest.TestCase):
 
             result = build_prompt(reply, messenger, config)
 
-        self.assertTrue(is_standalone_file_message(standalone))
-        self.assertFalse(is_standalone_file_message(reply))
+        self.assertTrue(is_standalone_attachment_message(standalone))
+        self.assertFalse(is_standalone_attachment_message(reply))
+        standalone_image = {
+            "message_id": "m-image",
+            "message_type": "image",
+            "content": json.dumps({"image_key": "img-key"}),
+        }
+        image_reply = {
+            "message_id": "m-image-reply",
+            "message_type": "text",
+            "parent_id": "m-image",
+            "content": json.dumps({"text": "请看这张图"}),
+        }
+        self.assertTrue(is_standalone_attachment_message(standalone_image))
+        self.assertFalse(is_standalone_attachment_message(image_reply))
         self.assertEqual(result.attached_files[0]["name"], "resource_01_report.pdf")
         payload = self._payload(result)
         self.assertIn("@", payload["user_input"])
