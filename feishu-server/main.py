@@ -135,7 +135,7 @@ def main() -> None:
     messenger = Messenger(config, token_provider)
     ai_runner = AIRunner(config)
     session_store = SessionStore(config)
-    scheduler = Scheduler(config, messenger, ai_runner)
+    scheduler = Scheduler(config, messenger, ai_runner, session_store)
     bot_open_id = os.getenv("FEISHU_BOT_OPEN_ID", "").strip()
     if not _looks_like_open_id(bot_open_id):
         bot_open_id = ""

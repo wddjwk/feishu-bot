@@ -5,7 +5,7 @@ description: 用户要求创建、查看、修改、运行或删除 FeishuBot �
 
 # FeishuBot 定时任务
 
-调度器地址通常为 `http://127.0.0.1:8066`。通过 API 操作任务，不要手改 `feishu-server/data/tasks.json`。
+调度器地址通常为 `http://127.0.0.1:8066`；端口被占用时服务会自动顺延，实际端口以 `feishu-server/data/scheduler_port.json` 为准（可用 `GET /api/health` 验证）。通过 API 操作任务，不要手改 `feishu-server/data/tasks.json`。
 
 ## 先选任务类型
 
@@ -30,6 +30,15 @@ description: 用户要求创建、查看、修改、运行或删除 FeishuBot �
 ```
 
 Cron 支持 `*`、`*/N`、`N-M`、`N,M,K`、`N`；例如 `0 9 * * *` 表示每天 09:00。
+
+## 投递目标（target）
+
+任务在哪里创建，结果就投递回哪里：
+
+- 私聊创建：`{"receive_id_type": "open_id", "receive_id": "<信封中的 user_id>"}`，结果发到该用户私聊。
+- 群聊创建（信封含 `group_id`）：`{"receive_id_type": "chat_id", "receive_id": "<group_id>"}`，结果发回该群。
+
+Agent 任务的结果卡片支持追问：用户在卡片下创建话题即可继续提问，服务会自动续接该次运行的 AI 会话。若任务执行需要群 ID、用户 ID 等上下文，直接写入 `payload.prompt`。
 
 ## Script 任务
 
@@ -89,7 +98,7 @@ DELETE /api/tasks/<id>
 POST   /api/tasks/<id>/run
 ```
 
-创建或修改后，必要时运行 `POST /api/tasks/<id>/run` 验证。最终报告任务 ID、自然语言时间、类型、目标用户、CLI/模型（Agent 时）和是否已手动运行。
+创建或修改后，必要时运行 `POST /api/tasks/<id>/run` 验证。最终报告任务 ID、自然语言时间、类型、投递目标（私聊用户或群聊）、CLI/模型（Agent 时）和是否已手动运行。
 
 ## 安全
 

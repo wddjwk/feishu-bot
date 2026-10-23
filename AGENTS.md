@@ -50,10 +50,11 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 
 ## 定时任务
 
-调度器监听本地 `127.0.0.1` API，任务状态保存在 `feishu-server/data/tasks.json`。
+调度器监听 `0.0.0.0` API（局域网可访问），默认端口 8066，被占用时自动顺延；实际端口写入 `feishu-server/data/scheduler_port.json`。任务状态保存在 `feishu-server/data/tasks.json`。
 
 - `script`：固定、确定、不需要推理的工作优先使用。脚本必须位于 `agent-workspace/scheduler/<task-id>/`，以 argv 直接执行。
 - `agent`：仅用于需要推理、研究、归纳或撰写的任务。未指定时固定使用 `config.json` 的默认 CLI/模型；可在任务 payload 固定 `tool` 与 `model`。
+- 任务在哪个会话创建（私聊或群聊），结果就投递回哪个会话；agent 任务的结果卡片会关联本次 AI 会话，用户可在卡片下创建话题追问。
 - 定时任务的使用规范见 `agent-workspace/.claude/skills/feishu-scheduler/SKILL.md`。
 
 ## 开发与运维

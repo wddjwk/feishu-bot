@@ -20,9 +20,11 @@ import cards
 from config import Config, ConfigError
 from services.ai_runner import AIRunner, format_thinking
 from services.messenger import FeishuApiError, Messenger
+from services.session_store import SessionStore, SessionStoreError
 import logger
 
 VALID_TASK_TYPES = {"agent", "script"}
+PORT_BIND_ATTEMPTS = 20
 
 
 class TaskValidationError(ValueError):
@@ -120,15 +122,17 @@ class ScheduledTask:
 
 
 class Scheduler:
-    def __init__(self, config: Config, messenger: Messenger, ai_runner: AIRunner) -> None:
+    def __init__(self, config: Config, messenger: Messenger, ai_runner: AIRunner, session_store: SessionStore) -> None:
         self.config = config
         self.messenger = messenger
         self.ai_runner = ai_runner
+        self.session_store = session_store
         self.path = config.resolve_path("server.scheduler.data_file")
         self.workspace = config.resolve_path("ai.workspace")
         self.script_root = self.workspace / "scheduler"
-        self.host = str(config.get("server.scheduler.host", "127.0.0.1"))
+        self.host = str(config.get("server.scheduler.host", "0.0.0.0"))
         self.port = int(config.get("server.scheduler.port", 8066))
+        self.port_file = self.path.parent / "scheduler_port.json"
         self.tick_seconds = int(config.get("server.scheduler.tick_seconds", 60))
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -140,10 +144,34 @@ class Scheduler:
 
     def start(self) -> None:
         handler_cls = self._make_handler()
-        self._server = ThreadingHTTPServer((self.host, self.port), handler_cls)
+        self._server = self._bind_server(handler_cls)
+        self._write_port_file()
         threading.Thread(target=self._tick_loop, name="scheduler-tick", daemon=True).start()
         threading.Thread(target=self._server.serve_forever, name="scheduler-http", daemon=True).start()
         logger.info("调度器已启动：地址=http://%s:%s", self.host, self.port)
+
+    def _bind_server(self, handler_cls: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+        first_port = self.port
+        last_error: OSError | None = None
+        for offset in range(PORT_BIND_ATTEMPTS):
+            port = first_port + offset
+            try:
+                server = ThreadingHTTPServer((self.host, port), handler_cls)
+            except OSError as exc:
+                last_error = exc
+                logger.warning("调度器端口 %s 不可用（%s），尝试顺延", port, exc)
+                continue
+            if port != first_port:
+                logger.warning("调度器端口已从 %s 顺延到 %s", first_port, port)
+            self.port = port
+            return server
+        raise RuntimeError(
+            f"调度器无法绑定端口 {first_port}-{first_port + PORT_BIND_ATTEMPTS - 1}：{last_error}"
+        )
+
+    def _write_port_file(self) -> None:
+        payload = {"host": self.host, "port": self.port, "pid": os.getpid()}
+        self.port_file.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def stop(self) -> None:
         self._stop.set()
@@ -212,8 +240,9 @@ class Scheduler:
 
     def _execute_task(self, task: ScheduledTask) -> None:
         logger.info("开始执行定时任务：ID=%s 名称=%s 类型=%s", task.id, task.name, task.type)
+        session_info: dict[str, str] | None = None
         if task.type == "agent":
-            card, last_result = self._execute_agent_task(task)
+            card, last_result, session_info = self._execute_agent_task(task)
         elif task.type == "script":
             card, last_result = self._execute_script_task(task)
         else:
@@ -221,8 +250,9 @@ class Scheduler:
             last_result = f"不支持的任务类型：{task.type}"
 
         try:
-            self.messenger.send_card(task.receive_id, task.receive_id_type, card)
+            sent = self.messenger.send_card(task.receive_id, task.receive_id_type, card)
             logger.info("定时任务结果已发送：ID=%s 接收方=%s", task.id, task.receive_id)
+            self._link_followup_session(task, session_info, sent)
         except FeishuApiError as exc:
             logger.exception("发送定时任务结果失败：ID=%s 错误=%s", task.id, exc)
             last_result = f"{last_result}\n发送结果失败：{exc}".strip()
@@ -235,13 +265,41 @@ class Scheduler:
                     self._save_locked()
         logger.info("定时任务执行结束：ID=%s 结果字符=%s", task.id, len(last_result))
 
-    def _execute_agent_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str]:
+    def _link_followup_session(self, task: ScheduledTask, session_info: dict[str, str] | None, sent: Any) -> None:
+        """把结果卡片消息与本次 AI 会话关联，用户可在卡片下创建话题追问。"""
+        if not session_info:
+            return
+        message_id = str(sent.get("message_id") or "") if isinstance(sent, dict) else ""
+        if not message_id:
+            logger.warning("定时任务结果卡片缺少 message_id，无法支持追问：ID=%s", task.id)
+            return
+        try:
+            self.session_store.set(
+                message_id,
+                session_info["session_id"],
+                tool=session_info["tool"],
+                model=session_info["model"],
+                link_type="bot_reply",
+                metadata={"scheduler_task_id": task.id, "scheduler_task_name": task.name},
+            )
+        except (SessionStoreError, ValueError) as exc:
+            logger.warning("保存定时任务追问会话关联失败：ID=%s 错误=%s", task.id, exc)
+            return
+        logger.info(
+            "定时任务卡片已关联会话（支持追问）：ID=%s 卡片=%s 会话=%s",
+            task.id,
+            message_id,
+            session_info["session_id"],
+        )
+
+    def _execute_agent_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str, dict[str, str] | None]:
         try:
             tool = task.tool or self.config.default_tool()
             model = self.config.resolve_model(tool, task.model) if task.model else self.config.default_model(tool)
+            session_id = str(uuid.uuid4()) if self.ai_runner.supports_explicit_session(tool) else None
         except (ConfigError, AttributeError) as exc:
             result = f"无法解析 AI CLI 或模型：{exc}"
-            return cards.build_error_card("AI 定时任务失败", result), result
+            return cards.build_error_card("AI 定时任务失败", result), result, None
         logger.info(
             "开始执行 AI 定时任务：ID=%s CLI=%s 模型=%s 超时=%ss",
             task.id,
@@ -259,17 +317,23 @@ class Scheduler:
             f"scheduled-{task.id}-{int(time.time())}",
             tool=tool,
             model=model,
+            session_id=session_id,
             timeout_seconds=task.timeout_seconds,
         )
         if result.ok:
+            session_info = (
+                {"session_id": result.session_id, "tool": tool, "model": model}
+                if result.session_id
+                else None
+            )
             return cards.build_ai_card(
                 result.tool,
                 result.model,
                 result.result,
                 format_thinking(result.parts, self.config),
                 usage=result.usage if self.config.get("options.features.show_token_usage_on_card", True) else None,
-            ), result.result
-        return cards.build_error_card("AI 定时任务失败", result.error or "未能获取有效输出", result.stderr), result.error or result.stderr
+            ), result.result, session_info
+        return cards.build_error_card("AI 定时任务失败", result.error or "未能获取有效输出", result.stderr), result.error or result.stderr, None
 
     def _execute_script_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str]:
         try:
