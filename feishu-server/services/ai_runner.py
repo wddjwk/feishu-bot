@@ -1283,8 +1283,8 @@ def _merge_usage(target: TokenUsage, source: TokenUsage) -> None:
 def _accumulate_pi_usage(target: TokenUsage, source: Any) -> None:
     """Accumulate Pi per-turn usage into target.
 
-    Pi reports per-turn usage (not cumulative), so we sum input/output across turns.
-    Cache is cumulative across turns — take the latest (max) value.
+    Pi reports per-turn usage (not cumulative), so we sum input/cache/output
+    across turns — the card shows total consumption of this run.
     """
     if not isinstance(source, dict):
         return
@@ -1298,13 +1298,9 @@ def _accumulate_pi_usage(target: TokenUsage, source: Any) -> None:
     if output_t is not None:
         total_out = output_t + (reasoning_t or 0)
         target.output_tokens = (target.output_tokens or 0) + total_out
-    cache_t: int | None = None
-    for v in (cache_read, cache_write):
-        if v is None:
-            continue
-        cache_t = v if cache_t is None else max(cache_t, v)
-    if cache_t is not None:
-        target.cached_tokens = max(target.cached_tokens or 0, cache_t)
+    cache_t = (cache_read or 0) + (cache_write or 0)
+    if cache_t:
+        target.cached_tokens = (target.cached_tokens or 0) + cache_t
 
 
 def _usage_from_stderr(stderr: str) -> TokenUsage:

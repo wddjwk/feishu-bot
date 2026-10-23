@@ -775,5 +775,19 @@ class FormatThinkingTests(unittest.TestCase):
         self.assertEqual(tool_result.text, "out")
 
 
+class PiUsageAccumulationTests(unittest.TestCase):
+    """Pi 单次运行的 in/cache/out 都应是跨 turn 的累加值，而非峰值。"""
+
+    def test_accumulates_input_cache_output_across_turns(self):
+        stdout = "\n".join([
+            '{"type":"turn_end","message":{"stopReason":"tool_use","usage":{"input":100,"output":10,"reasoning":5,"cacheRead":50,"cacheWrite":30}}}',
+            '{"type":"turn_end","message":{"stopReason":"stop","usage":{"input":200,"output":20,"cacheRead":150,"cacheWrite":0},"content":[{"type":"text","text":"done"}]}}',
+        ])
+        result = parse_output("pi-json", stdout)
+        self.assertEqual(result.usage.input_tokens, 300)
+        self.assertEqual(result.usage.output_tokens, 35)
+        self.assertEqual(result.usage.cached_tokens, 230)
+
+
 if __name__ == "__main__":
     unittest.main()

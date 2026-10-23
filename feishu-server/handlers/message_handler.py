@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from collections import deque
 from contextlib import nullcontext
@@ -12,7 +13,7 @@ import cards
 import commands
 from config import Config, ConfigError
 from handlers import BaseHandler
-from services.ai_runner import AIRunner, format_thinking
+from services.ai_runner import AIRunner, TokenUsage, format_thinking
 from services.messenger import FeishuApiError, Messenger
 from services.prompt_builder import build_prompt, extract_text, is_standalone_attachment_message, normalize_event
 from services.session_store import SessionStore
@@ -188,6 +189,7 @@ class MessageHandler(BaseHandler):
                             reply = None
                         if reply and result.session_id:
                             self._save_session_mappings(message, reply, conversation, result.session_id)
+                        self._record_session_usage(message, conversation, result)
                 else:
                     card = cards.build_error_card("AI 分析失败", result.error or "未能获取有效输出", result.stderr)
                     try:
@@ -279,6 +281,50 @@ class MessageHandler(BaseHandler):
                     metadata=metadata,
                 )
 
+    def _record_session_usage(
+        self,
+        message: dict[str, Any],
+        conversation: Conversation,
+        result: Any,
+    ) -> None:
+        """把本次运行的 token 用量累加到会话；话题追问时把首卡用量条刷新为累计值。
+
+        auto-memory resume 的消耗不计入，卡片只反映用户可见问答轮次。
+        """
+        try:
+            if not result.ok or not result.session_id or result.usage is None:
+                return
+            usage = {
+                "input_tokens": result.usage.input_tokens or 0,
+                "cached_tokens": result.usage.cached_tokens or 0,
+                "output_tokens": result.usage.output_tokens or 0,
+            }
+            if not any(usage.values()):
+                return
+            total = self.session_store.add_session_usage(result.session_id, usage)
+            if total is None or not conversation.resume:
+                return
+            self._refresh_thread_root_card_usage(message, total)
+        except Exception:
+            logger.warning("记录会话 token 用量失败：消息=%s", message.get("message_id"), exc_info=True)
+
+    def _refresh_thread_root_card_usage(self, message: dict[str, Any], total: dict[str, int]) -> None:
+        root_id = str(message.get("root_id") or "").strip()
+        if not root_id:
+            logger.debug("追问消息缺少 root_id，无法刷新首卡用量")
+            return
+        card_message = self.messenger.get_message(root_id)
+        msg_type = str((card_message or {}).get("msg_type") or (card_message or {}).get("message_type") or "")
+        if not isinstance(card_message, dict) or msg_type != "interactive":
+            logger.debug("话题首卡不是卡片消息，跳过用量刷新：消息=%s", root_id)
+            return
+        card = json.loads(card_message.get("content") or "{}")
+        if not isinstance(card, dict) or not cards.update_usage_in_card(card, TokenUsage(**total)):
+            logger.debug("话题首卡未找到用量元素，跳过刷新：消息=%s", root_id)
+            return
+        self.messenger.update_card(root_id, card)
+        logger.info("已刷新话题首卡累计用量：消息=%s 累计=%s", root_id, total)
+
     def _reply_deliveries(
         self,
         message: dict[str, Any],
@@ -321,6 +367,7 @@ class MessageHandler(BaseHandler):
                 result.session_id,
                 related_bot_message_ids=delivered_message_ids,
             )
+        self._record_session_usage(message, conversation, result)
         logger.info("文件交付完成说明已发送：文件消息=%s 说明消息=%s", delivered_message_ids[-1], reply.get("message_id"))
 
     def _conversation_for(self, message: dict[str, Any]) -> Conversation | None:

@@ -103,6 +103,14 @@ class Messenger:
         query = {"receive_id_type": receive_id_type}
         return self._request_json("POST", "/im/v1/messages", query=query, body=body).get("data", {})
 
+    def update_card(self, message_id: str, card: dict[str, Any]) -> dict[str, Any]:
+        """全量更新已发送的卡片消息。
+
+        要求卡片 config.update_multi 为 true、消息未撤回且在 14 天内，单消息 5 QPS。
+        """
+        body = {"content": json.dumps(card, ensure_ascii=False)}
+        return self._request_json("PATCH", f"/im/v1/messages/{quote(message_id)}", body=body).get("data", {})
+
     def get_message(self, message_id: str) -> dict[str, Any] | None:
         data = self._request_json(
             "GET",

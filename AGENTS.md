@@ -44,7 +44,8 @@ server设计了一套记忆系统（SOUL.md, LONG_TERM, SHORT_TERM），它们�
 - `feishu-server/config.json`：唯一配置文件；相对路径以仓库根为基准。
 - 根目录 `config.json`（可选、不入 git）：用户覆盖，深度合并优先；示例见 `config.json.example`。
 - `/reload` 热加载配置（含用户覆盖），保留进程内 `/cli`、`/model` 选择；重启后恢复默认。
-- `cards.py` 统一管理 Card JSON 2.0；卡片结构为标题（工具图标+模型名）、正文（Markdown，长代码块自动折叠）、token 用量（状态栏风格小字）、分析过程折叠块。卡片宽度和工具图标由配置控制。
+- `cards.py` 统一管理 Card JSON 2.0；卡片结构为标题（工具图标+模型名）、正文（Markdown，长代码块自动折叠）、token 用量（状态栏风格小字，元素带 `element_id`）、分析过程折叠块。卡片宽度和工具图标由配置控制。
+- 已发送卡片可通过 `Messenger.update_card`（PATCH `/im/v1/messages/:message_id`）二次编辑；卡片 config 必须保持 `update_multi: true`。话题追问后会话 token 用量累加持久化在 SessionStore（auto-memory resume 消耗不计入），并把话题首卡的用量条刷新为累计值；追问卡片本身只显示本次消耗。Pi 的单次运行用量为跨 turn 累加（含 cache）。
 - 用户命令仅维护 `/help`、`/running`、`/kill`、`/timer`、`/timer-rm`、`/reload`、`/status`、`/cli`、`/model`。
 - `feishu-server/data/session_map.json` 保存会话与飞书消息/话题关联；它是可清理的运行数据，不是业务数据库。
 

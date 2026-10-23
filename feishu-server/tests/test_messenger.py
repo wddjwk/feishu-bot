@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -66,6 +67,17 @@ class MessengerTests(unittest.TestCase):
 
         self.assertEqual(path, Path("download/fallback.png"))
         fallback.assert_called_once()
+
+    def test_update_card_patches_message_with_serialized_card(self):
+        messenger = Messenger(FakeConfig(), token_provider=None, lark_cli=FakeLarkCli())
+        card = {"schema": "2.0", "config": {"update_multi": True}, "body": {"elements": []}}
+        with patch.object(messenger, "_request_json", return_value={"data": {}}) as request:
+            messenger.update_card("om_1", card)
+
+        method, path = request.call_args[0]
+        self.assertEqual(method, "PATCH")
+        self.assertEqual(path, "/im/v1/messages/om_1")
+        self.assertEqual(json.loads(request.call_args[1]["body"]["content"]), card)
 
 
 if __name__ == "__main__":

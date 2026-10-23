@@ -240,7 +240,7 @@ class Scheduler:
 
     def _execute_task(self, task: ScheduledTask) -> None:
         logger.info("开始执行定时任务：ID=%s 名称=%s 类型=%s", task.id, task.name, task.type)
-        session_info: dict[str, str] | None = None
+        session_info: dict[str, Any] | None = None
         if task.type == "agent":
             card, last_result, session_info = self._execute_agent_task(task)
         elif task.type == "script":
@@ -265,7 +265,7 @@ class Scheduler:
                     self._save_locked()
         logger.info("定时任务执行结束：ID=%s 结果字符=%s", task.id, len(last_result))
 
-    def _link_followup_session(self, task: ScheduledTask, session_info: dict[str, str] | None, sent: Any) -> None:
+    def _link_followup_session(self, task: ScheduledTask, session_info: dict[str, Any] | None, sent: Any) -> None:
         """把结果卡片消息与本次 AI 会话关联，用户可在卡片下创建话题追问。"""
         if not session_info:
             return
@@ -282,7 +282,10 @@ class Scheduler:
                 link_type="bot_reply",
                 metadata={"scheduler_task_id": task.id, "scheduler_task_name": task.name},
             )
-        except (SessionStoreError, ValueError) as exc:
+            usage = session_info.get("usage")
+            if isinstance(usage, dict) and any(int(value or 0) for value in usage.values()):
+                self.session_store.add_session_usage(session_info["session_id"], usage)
+        except (SessionStoreError, ValueError, TypeError) as exc:
             logger.warning("保存定时任务追问会话关联失败：ID=%s 错误=%s", task.id, exc)
             return
         logger.info(
@@ -292,7 +295,7 @@ class Scheduler:
             session_info["session_id"],
         )
 
-    def _execute_agent_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str, dict[str, str] | None]:
+    def _execute_agent_task(self, task: ScheduledTask) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
         try:
             tool = task.tool or self.config.default_tool()
             model = self.config.resolve_model(tool, task.model) if task.model else self.config.default_model(tool)
@@ -322,7 +325,16 @@ class Scheduler:
         )
         if result.ok:
             session_info = (
-                {"session_id": result.session_id, "tool": tool, "model": model}
+                {
+                    "session_id": result.session_id,
+                    "tool": tool,
+                    "model": model,
+                    "usage": {
+                        "input_tokens": result.usage.input_tokens or 0 if result.usage else 0,
+                        "cached_tokens": result.usage.cached_tokens or 0 if result.usage else 0,
+                        "output_tokens": result.usage.output_tokens or 0 if result.usage else 0,
+                    },
+                }
                 if result.session_id
                 else None
             )

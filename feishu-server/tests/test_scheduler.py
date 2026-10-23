@@ -80,6 +80,7 @@ class FakeRunner:
 class FakeSessionStore:
     def __init__(self) -> None:
         self.links: list[dict] = []
+        self.usage_added: list[dict] = []
 
     def set(self, key, session_id, *, tool, model, link_type="message", metadata=None):
         self.links.append(
@@ -92,6 +93,10 @@ class FakeSessionStore:
                 "metadata": metadata or {},
             }
         )
+
+    def add_session_usage(self, session_id, usage):
+        self.usage_added.append({"session_id": session_id, "usage": usage})
+        return {key: int(usage.get(key) or 0) for key in ("input_tokens", "cached_tokens", "output_tokens")}
 
 
 class SchedulerTests(unittest.TestCase):
@@ -322,6 +327,49 @@ class SchedulerTests(unittest.TestCase):
 
         self.assertIsNone(runner.calls[0]["session_id"])
         self.assertEqual(store.links, [])
+
+    def test_agent_task_seeds_session_usage_for_followup_accumulation(self):
+        from services.ai_runner import TokenUsage
+
+        class UsageRunner(FakeRunner):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None):
+                result = super().run(
+                    prompt,
+                    message_id,
+                    tool=tool,
+                    model=model,
+                    session_id=session_id,
+                    resume_session_id=resume_session_id,
+                    timeout_seconds=timeout_seconds,
+                )
+                result.usage = TokenUsage(100, 10, 20)
+                return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            messenger = FakeMessenger()
+            runner = UsageRunner()
+            store = FakeSessionStore()
+            scheduler = Scheduler(FakeConfig(Path(tmp)), messenger, runner, store)
+            saved = scheduler.upsert_task(
+                {
+                    "id": "usage-agent",
+                    "type": "agent",
+                    "cron": "0 9 * * *",
+                    "target": {"receive_id": "ou_user"},
+                    "payload": {"prompt": "汇总"},
+                }
+            )
+            scheduler._execute_task(ScheduledTask.from_dict(saved))
+
+        self.assertEqual(
+            store.usage_added,
+            [
+                {
+                    "session_id": runner.calls[0]["session_id"],
+                    "usage": {"input_tokens": 100, "cached_tokens": 10, "output_tokens": 20},
+                }
+            ],
+        )
 
     def test_start_falls_back_to_next_port_when_occupied(self):
         def reserve_free_pair() -> tuple[socket.socket, int]:

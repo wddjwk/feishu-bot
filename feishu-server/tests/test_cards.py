@@ -133,5 +133,47 @@ class UsageElementTests(unittest.TestCase):
         self.assertEqual(card["header"]["title"]["content"], "🐇Codebuddy deepseek-v4-flash")
 
 
+class UsageCardUpdateTests(unittest.TestCase):
+    """卡片用量元素带稳定 element_id，可对已构建/已发送的卡片做二次刷新。"""
+
+    def test_usage_element_carries_stable_id(self):
+        from services.ai_runner import TokenUsage
+        el = cards._usage_element(TokenUsage(1, 0, 1))
+        self.assertEqual(el["element_id"], cards.USAGE_ELEMENT_ID)
+
+    def test_update_usage_in_card_replaces_footer(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card("pi", "model-a", "first answer", "", usage=TokenUsage(100, 10, 20))
+        self.assertTrue(cards.update_usage_in_card(card, TokenUsage(300, 30, 60)))
+        matches = [
+            el for el in card["body"]["elements"]
+            if el.get("element_id") == cards.USAGE_ELEMENT_ID
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["content"], cards.usage_summary(TokenUsage(300, 30, 60)))
+
+    def test_update_usage_in_card_inside_thinking_section(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card("pi", "model-a", "answer", "some thinking", usage=TokenUsage(100, 10, 20))
+        self.assertTrue(cards.update_usage_in_card(card, TokenUsage(500, 50, 90)))
+        matches = [
+            el for el in card["body"]["elements"]
+            if el.get("element_id") == cards.USAGE_ELEMENT_ID
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertIn("↑ 500", matches[0]["content"])
+
+    def test_update_usage_missing_element_returns_false(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card("pi", "model-a", "answer")
+        self.assertFalse(cards.update_usage_in_card(card, TokenUsage(1, 1, 1)))
+
+    def test_update_usage_empty_usage_returns_false(self):
+        from services.ai_runner import TokenUsage
+        card = cards.build_ai_card("pi", "model-a", "answer", "", usage=TokenUsage(100, 10, 20))
+        self.assertFalse(cards.update_usage_in_card(card, TokenUsage()))
+        self.assertFalse(cards.update_usage_in_card(card, None))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -266,8 +266,11 @@ def _format_count(n: int | None) -> str:
     return f"{value:.1f}M" if rounded < 10 else f"{rounded}M"
 
 
-def _usage_element(usage: "TokenUsage | None") -> dict[str, Any] | None:
-    """Build a compact token-usage element for the card footer (statusline style)."""
+USAGE_ELEMENT_ID = "token_usage_footer"
+
+
+def usage_summary(usage: "TokenUsage | None") -> str | None:
+    """Render token usage as a compact statusline-style string (or None if empty)."""
     if usage is None:
         return None
     input_t = getattr(usage, "input_tokens", None)
@@ -282,11 +285,43 @@ def _usage_element(usage: "TokenUsage | None") -> dict[str, Any] | None:
         parts.append("↓ " + _format_count(output_t))
     if not parts:
         return None
+    return "  ·  ".join(parts)
+
+
+def _usage_element(usage: "TokenUsage | None") -> dict[str, Any] | None:
+    """Build a compact token-usage element for the card footer (statusline style)."""
+    content = usage_summary(usage)
+    if content is None:
+        return None
     return {
         "tag": "markdown",
-        "content": "  ·  ".join(parts),
+        "element_id": USAGE_ELEMENT_ID,
+        "content": content,
         "text_size": "small",
     }
+
+
+def update_usage_in_card(card: dict[str, Any], usage: "TokenUsage | None") -> bool:
+    """Replace the usage footer content of an already-built card, in place.
+
+    Returns True when the usage element was found and refreshed. Used together
+    with Messenger.update_card to patch a previously sent card.
+    """
+    content = usage_summary(usage)
+    if content is None:
+        return False
+    return _replace_usage_content(card.get("body"), content)
+
+
+def _replace_usage_content(node: Any, content: str) -> bool:
+    if isinstance(node, dict):
+        if node.get("element_id") == USAGE_ELEMENT_ID and node.get("tag") == "markdown":
+            node["content"] = content
+            return True
+        return any(_replace_usage_content(value, content) for value in node.values())
+    if isinstance(node, list):
+        return any(_replace_usage_content(item, content) for item in node)
+    return False
 
 
 def build_ai_card(tool: str, model: str, result: str, thinking: str = "", usage: "TokenUsage | None" = None) -> dict[str, Any]:

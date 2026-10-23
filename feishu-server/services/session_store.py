@@ -23,6 +23,8 @@ class SessionStoreError(RuntimeError):
 
 
 class SessionStore:
+    USAGE_KEYS = ("input_tokens", "cached_tokens", "output_tokens")
+
     def __init__(self, config: Config) -> None:
         self.path = config.resolve_path("server.session_store.path")
         self.max_links = self._config_int(config, "server.session_store.max_links", 500, minimum=0)
@@ -89,6 +91,45 @@ class SessionStore:
                 self._next_cleanup_at = time.monotonic() + self.cleanup_interval_seconds
             self._write_locked(data)
         logger.debug("已保存会话关联：键=%s 类型=%s 会话=%s", key, link_type, session_id)
+
+    def add_session_usage(self, session_id: str, usage: dict[str, Any]) -> dict[str, int] | None:
+        """把一次 AI 运行的 token 用量累加到会话上，返回累计值；会话不存在时返回 None。"""
+        if not session_id:
+            return None
+        with self._lock:
+            data, reset = self._load_locked()
+            if reset:
+                self._write_locked(data)
+            session = data["sessions"].get(session_id)
+            if not isinstance(session, dict):
+                logger.warning("累计会话用量失败，会话不存在：会话=%s", session_id)
+                return None
+            current = session.get("usage") if isinstance(session.get("usage"), dict) else {}
+            total = {
+                key: max(int(current.get(key) or 0), 0) + max(self._as_int(usage.get(key)), 0)
+                for key in self.USAGE_KEYS
+            }
+            session["usage"] = total
+            session["updated_at"] = int(time.time())
+            self._write_locked(data)
+        logger.debug("已累计会话 token 用量：会话=%s 累计=%s", session_id, total)
+        return total
+
+    def get_session_usage(self, session_id: str) -> dict[str, int]:
+        with self._lock:
+            data, _reset = self._load_locked()
+            session = data["sessions"].get(session_id)
+            usage = session.get("usage") if isinstance(session, dict) else None
+        if not isinstance(usage, dict):
+            return {key: 0 for key in self.USAGE_KEYS}
+        return {key: self._as_int(usage.get(key)) for key in self.USAGE_KEYS}
+
+    @staticmethod
+    def _as_int(value: Any) -> int:
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            return 0
 
     def resolve_for_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         for key in (message.get("thread_id"), message.get("root_id"), message.get("parent_id")):

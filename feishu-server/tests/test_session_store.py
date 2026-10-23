@@ -102,5 +102,30 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(result["sessions"], 1)
             self.assertEqual(store.stats()["links"], 0)
 
+    def test_add_session_usage_accumulates_and_persists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = SessionStore(FakeConfig(root))
+            store.set("bot-card", "session-1", tool="pi", model="model-a", link_type="bot_reply")
+
+            first = store.add_session_usage("session-1", {"input_tokens": 100, "cached_tokens": 10, "output_tokens": 20})
+            second = store.add_session_usage("session-1", {"input_tokens": 50, "cached_tokens": 5, "output_tokens": 7})
+
+            self.assertEqual(first, {"input_tokens": 100, "cached_tokens": 10, "output_tokens": 20})
+            self.assertEqual(second, {"input_tokens": 150, "cached_tokens": 15, "output_tokens": 27})
+            persisted = json.loads(store.path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["sessions"]["session-1"]["usage"], second)
+            reloaded = SessionStore(FakeConfig(root))
+            self.assertEqual(reloaded.get_session_usage("session-1"), second)
+
+    def test_add_session_usage_unknown_session_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SessionStore(FakeConfig(Path(tmp)))
+            self.assertIsNone(store.add_session_usage("missing", {"input_tokens": 1}))
+            self.assertEqual(
+                store.get_session_usage("missing"),
+                {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0},
+            )
+
 if __name__ == "__main__":
     unittest.main()

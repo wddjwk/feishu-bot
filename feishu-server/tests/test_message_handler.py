@@ -44,12 +44,17 @@ class FakeMessenger:
         self.reactions: list[dict] = []
         self.deleted_reactions: list[dict] = []
         self.files: list[dict] = []
+        self.updates: list[dict] = []
         self.bot_info_calls = 0
         self.bot_open_id = "ou_bot"
 
     def reply_card(self, message_id: str, card: dict, *, reply_in_thread: bool | None = None):
         self.replies.append({"message_id": message_id, "reply_in_thread": reply_in_thread, "card": card})
         return {"message_id": f"bot-{message_id}", "thread_id": "thread-1" if reply_in_thread else ""}
+
+    def update_card(self, message_id: str, card: dict):
+        self.updates.append({"message_id": message_id, "card": card})
+        return {"message_id": message_id}
 
     def get_message(self, message_id: str):
         return {
@@ -116,9 +121,13 @@ class FakeRunner:
 
 
 class FakeSessionStore:
+    USAGE_KEYS = ("input_tokens", "cached_tokens", "output_tokens")
+
     def __init__(self, resume_info: dict | None = None) -> None:
         self.saved: list[dict] = []
         self.resume_info = resume_info
+        self.usage_added: list[dict] = []
+        self.session_usage: dict[str, int] = {key: 0 for key in self.USAGE_KEYS}
 
     def resolve_for_thread(self, message: dict):
         return self.resume_info if message.get("thread_id") else None
@@ -134,6 +143,13 @@ class FakeSessionStore:
                 "metadata": metadata,
             }
         )
+
+    def add_session_usage(self, session_id: str, usage: dict):
+        self.usage_added.append({"session_id": session_id, "usage": usage})
+        self.session_usage = {
+            key: self.session_usage.get(key, 0) + int(usage.get(key) or 0) for key in self.USAGE_KEYS
+        }
+        return dict(self.session_usage)
 
 
 class ImmediateThread:
@@ -694,6 +710,123 @@ class AutoMemoryResumeTests(unittest.TestCase):
             handler.handle_event(event)
 
         self.assertEqual(len(runner.calls), 1)
+
+
+class SessionUsageTrackingTests(unittest.TestCase):
+    """会话级 token 用量累计：追问卡片显示本次消耗，话题首卡刷新为累计值。"""
+
+    @staticmethod
+    def _usage_runner(input_t: int, cached_t: int, output_t: int):
+        from services.ai_runner import TokenUsage
+
+        class UsageRunner(FakeRunner):
+            def run(self, prompt, message_id, *, tool=None, model=None, session_id=None, resume_session_id=None, timeout_seconds=None, register=True):
+                self.calls.append({"prompt": prompt, "message_id": message_id, "session_id": session_id, "resume_session_id": resume_session_id})
+                return AIResult(
+                    True,
+                    tool or "pi",
+                    model or "model-a",
+                    result="done",
+                    session_id=session_id or resume_session_id,
+                    usage=TokenUsage(input_t, cached_t, output_t),
+                )
+
+        return UsageRunner()
+
+    @staticmethod
+    def _usage_content(card: dict) -> str:
+        import cards as cards_module
+
+        matches = [
+            el for el in card["body"]["elements"]
+            if el.get("element_id") == cards_module.USAGE_ELEMENT_ID
+        ]
+        return matches[0]["content"] if matches else ""
+
+    def test_followup_card_shows_this_run_and_root_card_gets_cumulative(self):
+        import cards as cards_module
+        from services.ai_runner import TokenUsage
+
+        root_card = cards_module.build_ai_card("pi", "model-a", "first answer", "", usage=TokenUsage(100, 10, 20))
+        messenger = FakeMessenger()
+        messenger.get_message = lambda message_id: {
+            "message_id": message_id,
+            "msg_type": "interactive",
+            "content": json.dumps(root_card),
+        }
+        store = FakeSessionStore({"session_id": "old-session", "tool": "pi", "model": "model-a"})
+        store.session_usage = {"input_tokens": 100, "cached_tokens": 10, "output_tokens": 20}
+        handler = MessageHandler(FakeConfig(), messenger, self._usage_runner(200, 20, 40), store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-followup",
+                "message_type": "text",
+                "content": json.dumps({"text": "continue"}),
+                "thread_id": "thread-1",
+                "root_id": "bot-root",
+                "create_time": "3",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(store.usage_added, [{"session_id": "old-session", "usage": {"input_tokens": 200, "cached_tokens": 20, "output_tokens": 40}}])
+        self.assertIn("↑ 200", self._usage_content(messenger.replies[0]["card"]))
+        self.assertEqual(len(messenger.updates), 1)
+        self.assertEqual(messenger.updates[0]["message_id"], "bot-root")
+        updated_content = self._usage_content(messenger.updates[0]["card"])
+        self.assertIn("↑ 300", updated_content)
+        self.assertIn("⬢ 30", updated_content)
+        self.assertIn("↓ 60", updated_content)
+
+    def test_first_run_records_usage_without_updating_any_card(self):
+        messenger = FakeMessenger()
+        store = FakeSessionStore()
+        handler = MessageHandler(FakeConfig(), messenger, self._usage_runner(100, 10, 20), store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-first",
+                "message_type": "text",
+                "content": json.dumps({"text": "hi"}),
+                "create_time": "2",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread), patch(
+            "handlers.message_handler.uuid4", return_value=UUID("12345678-1234-5678-1234-567812345678")
+        ):
+            handler.handle_event(event)
+
+        self.assertEqual(len(store.usage_added), 1)
+        self.assertEqual(store.usage_added[0]["session_id"], "12345678-1234-5678-1234-567812345678")
+        self.assertEqual(messenger.updates, [])
+
+    def test_followup_without_usage_element_on_root_card_skips_update(self):
+        messenger = FakeMessenger()
+        messenger.get_message = lambda message_id: {
+            "message_id": message_id,
+            "msg_type": "interactive",
+            "content": json.dumps({"schema": "2.0", "config": {"update_multi": True}, "body": {"elements": []}}),
+        }
+        store = FakeSessionStore({"session_id": "old-session", "tool": "pi", "model": "model-a"})
+        handler = MessageHandler(FakeConfig(), messenger, self._usage_runner(200, 20, 40), store, scheduler=None)
+        event = message_event(
+            {
+                "message_id": "m-followup-2",
+                "message_type": "text",
+                "content": json.dumps({"text": "continue"}),
+                "thread_id": "thread-1",
+                "root_id": "bot-root",
+                "create_time": "3",
+            }
+        )
+
+        with patch("handlers.message_handler.threading.Thread", ImmediateThread):
+            handler.handle_event(event)
+
+        self.assertEqual(len(store.usage_added), 1)
+        self.assertEqual(messenger.updates, [])
 
 
 if __name__ == "__main__":
